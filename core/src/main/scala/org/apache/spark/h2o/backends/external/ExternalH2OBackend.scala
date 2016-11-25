@@ -21,9 +21,9 @@ package org.apache.spark.h2o.backends.external
 import java.io.File
 
 import org.apache.hadoop.fs.Path
-import org.apache.spark.h2o.{H2OConf, H2OContext}
 import org.apache.spark.h2o.backends.SparklingBackend
 import org.apache.spark.h2o.utils.NodeDesc
+import org.apache.spark.h2o.{H2OConf, H2OContext}
 import org.apache.spark.internal.Logging
 import water.api.RestAPIManager
 import water.{H2O, H2OStarter}
@@ -45,8 +45,10 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
       "-nodes", conf.numOfExternalH2ONodes.get,
       "-notify", conf.clusterInfoFile.get,
       "-J", "-md5skip",
+      "-jobname", conf.cloudName.get,
       "-mapperXmx", conf.mapperXmx,
-      "-output", conf.HDFSOutputDir.get
+      "-output", conf.HDFSOutputDir.get,
+      "-disown"
     )
 
     // start external h2o cluster and log the output
@@ -70,12 +72,33 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
 
 
     // get ip port
-    val clusterInfo = Source.fromFile(hc.getConf.clusterInfoFile.get + ".tmp").getLines
+    val clusterInfo = Source.fromFile(hc.getConf.clusterInfoFile.get).getLines
     val ipPort = clusterInfo.next()
-    yarnAppId = clusterInfo.next()
+    yarnAppId = clusterInfo.next().replace("job", "application")
 
+    logInfo(s"Yarn ID obtained from cluster file: $yarnAppId")
+    logInfo(s"Cluster ip and port obtained from cluster file: $ipPort")
+
+    sys.ShutdownHookThread {
+      if(hc.getConf.h2oDriverPath.isDefined){
+        shutdownCleanUp()
+      }
+    }
     assert(proc == 0, s"Starting external H2O cluster failed with return value $proc.")
     ipPort
+  }
+
+  private def shutdownCleanUp(): Unit ={
+    try {
+      val hdfs = org.apache.hadoop.fs.FileSystem.get(hc.sparkContext.hadoopConfiguration)
+      hdfs.delete(new Path(hc.getConf.HDFSOutputDir.get), true)
+      new File(hc.getConf.clusterInfoFile.get).delete()
+    }catch {
+      case e: Exception => log.error(e.getMessage)
+    }
+    import scala.sys.process._
+    // kill the job
+    s"yarn application -kill $yarnAppId".!
   }
 
   override def init(): Array[NodeDesc] = {
@@ -130,17 +153,7 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     // stop only when we have external h2o cluster running on yarn
     // otherwise stopping is not supported
     if(hc.getConf.HDFSOutputDir.isDefined){
-      try {
-        val hdfs = org.apache.hadoop.fs.FileSystem.get(hc.sparkContext.hadoopConfiguration)
-        hdfs.delete(new Path(hc.getConf.HDFSOutputDir.get), true)
-        new File(hc.getConf.clusterInfoFile.get).delete()
-      }catch {
-        case e: Exception => log.error(e.getMessage)
-      }
-      import scala.sys.process._
-      // kill the job
-      s"yarn application -kill $yarnAppId".!
-
+      shutdownCleanUp()
       //if (stopSparkContext) hc.sparkContext.stop()
       //H2O.orderlyShutdown(1000)
       //H2O.exit(0)
@@ -150,9 +163,15 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
   override def checkAndUpdateConf(conf: H2OConf): H2OConf = {
     super.checkAndUpdateConf(conf)
 
+    lazy val driverPath = sys.env.get("H2O_EXTENDED_DRIVER")
+    if(conf.h2oDriverPath.isEmpty && driverPath.isDefined){
+      log.info(s"Obtaining path to extended h2o driver from environment variable. Specified path is ${driverPath.get}")
+      conf.setH2ODriverPath(driverPath.get)
+    }
+
     if (conf.h2oDriverPath.isDefined) {
       if (conf.cloudName.isEmpty) {
-        conf.setCloudName("sparkling-water-" + System.getProperty("user.name", "cluster") + "_" + Random.nextInt())
+        conf.setCloudName("sparkling-water-" + System.getProperty("user.name", "cluster") + "_" + Math.abs(Random.nextInt()))
       }
 
       if (conf.numOfExternalH2ONodes.isEmpty) {
@@ -164,7 +183,7 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
       }
 
       if(conf.clusterInfoFile.isEmpty){
-        conf.setClusterConfigFile(conf.cloudName.get)
+        conf.setClusterConfigFile("notify_" + conf.cloudName.get)
       }
 
     } else {
