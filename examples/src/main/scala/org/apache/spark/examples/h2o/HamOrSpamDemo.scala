@@ -25,10 +25,10 @@ import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import hex.deeplearning.{DeepLearning, DeepLearningModel}
 import org.apache.spark._
 import org.apache.spark.h2o._
-import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import sun.misc.Unsafe
-import water.fvec.Vec
+import water.fvec.{AppendableVec, NewChunk, Vec}
 import water.support.{H2OFrameSupport, ModelMetricsSupport, SparkContextSupport}
+import water.{Futures, Key}
 
 import scala.io.Source
 import scala.language.postfixOps
@@ -59,68 +59,46 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     val sc = new SparkContext(conf)
     // Initialize H2O context
     implicit val h2oContext = H2OContext.getOrCreate(sc)
-    // Initialize SQL context
-    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     
-    // Data load
-    val lines = readSamples("examples/smalldata/" + DATAFILE)
-    val size = lines.size
-    val hs = lines map (_(0))
-    val msgs = lines map (_(1))
-    val spamModel = new SpamModel(msgs)
-    
-    val trainingRows = hs zip spamModel.weights map TrainingRow.tupled
+    try {
+      // Data load
+      val lines = readSamples("examples/smalldata/" + DATAFILE)
+      val size = lines.size
+      val hs = lines map (_ (0))
+      val msgs = lines map (_ (1))
+      val spamModel = new SpamModel(msgs)
 
-    val categorizedSMSs = trainingRows map (new CatSMS(_))
-    val cutoff = (trainingRows.length * 0.8).toInt
-    // Split table
-    val (before, after) = trainingRows.splitAt(cutoff)
-    val train = buildTable(sc, before)
-    val valid = buildTable(sc, after)
-//    val inrdd = resultRDD.take(size).toList
-    
-    val dlModel = buildDLModel(train, valid)
+      val trainingRows = hs zip spamModel.weights map TrainingRow.tupled
 
-    // Collect model metrics
-    val trainMetrics = modelMetrics[ModelMetricsBinomial](dlModel, train)
-    val validMetrics = modelMetrics[ModelMetricsBinomial](dlModel, valid)
-    println(
-      s"""
+      val categorizedSMSs = trainingRows map (new CatSMS(_))
+      val cutoff = (categorizedSMSs.length * 0.8).toInt
+      // Split table
+      val (before, after) = categorizedSMSs.splitAt(cutoff)
+      val train = buildTable(before)
+      val valid = buildTable(after)
+
+      val dlModel = buildDLModel(train, valid)
+
+      // Collect model metrics
+      val trainMetrics = modelMetrics[ModelMetricsBinomial](dlModel, train)
+      val validMetrics = modelMetrics[ModelMetricsBinomial](dlModel, valid)
+      println(
+        """
          |AUC on train data = ${trainMetrics.auc}
          |AUC on valid data = ${validMetrics.auc}
-       """.stripMargin)
+      """.stripMargin)
 
-    val isSpam = spamModel.isSpam(sc, dlModel)
-    // Detect spam messages
-    TEST_MSGS.foreach(msg => {
-      println(
-        s"""
-           |"$msg" is ${if (isSpam(msg)) "SPAM" else "HAM"}
-       """.stripMargin)
+    val isSpam = spamModel.isSpam(dlModel)
+    TEST_MSGS.foreach(msg => { println("$msg is " + (if (isSpam(msg)) "SPAM" else "HAM"))
     })
-
-    // Shutdown Spark cluster and H2O
-    h2oContext.stop(stopSparkContext = true)
+    } finally {
+      // Shutdown Spark cluster and H2O
+      h2oContext.stop(stopSparkContext = true)
+    }
   }
 
-  def buildTable(sc: SparkContext, trainingRows: List[TrainingRow]): H2OFrame = {
-    implicit val h2oContext = H2OContext.getOrCreate(sc)
-    import h2oContext.implicits._
-    // Initialize SQL context
-    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
-    import sqlContext.implicits._
-    val rdd = toSC(sc, trainingRows)
-    val df: DataFrame = rdd.toDF()
-    val table: H2OFrame = df
-    categorize(table, "target")
-    table
-  }
-
-  def categorize(table: H2OFrame, colName: String): Unit = {
-    val targetVec: Vec = table.vec(colName)
-    val categoricalVec: Vec = targetVec.toCategoricalVec
-    val targetAt: Int = table.find(colName)
-    table.replace(targetAt, categoricalVec).remove()
+  def buildTable(trainingRows: List[CatSMS]): H2OFrame = {
+    new H2OFrame(new Frame(trainingRows.head.names, catVecs(trainingRows)))
   }
 
   def readSamples(dataFile: String): List[Array[String]] = {
@@ -151,28 +129,21 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     
     lazy val modelIdf: Array[Double] = idf0.idf(minDocFreq)
 
-    lazy val weights: List[Array[Double]] = tf map idfNormalize(modelIdf)
+    private val normalize: (Array[Double]) => Array[Double] = idfNormalize(modelIdf)
+    lazy val weights: List[Array[Double]] = tf map normalize
     
     def weigh(msg: String): Array[Double] = weighWords(tokenize(msg).toList)
 
     /** Spam detector */
-    def isSpam(sc: SparkContext,
-               dlModel: DeepLearningModel)
-              (implicit sqlContext: SQLContext, h2oContext: H2OContext) = (msg: String) => {
-      import h2oContext.implicits._
-      import sqlContext.implicits._
+    def isSpam(dlModel: DeepLearningModel) = (msg: String) => {
       val weights = weigh(msg)
-      val normalizedWeights =idfNormalize(modelIdf)(weights)
-      val  hamThreshold: Double = 0.5
-      val weighted:RDD[Array[Double]] = toSC(sc, Seq(weights))
-
-      val msgDF = toSC(sc, Seq(DataInside(normalizedWeights))).toDF
-      val msgTable: H2OFrame = msgDF
-      val prediction = dlModel.score(msgTable)
+      val normalizedWeights = normalize(weights)
+      val sampleFrame = DataInside(normalizedWeights).frame
+      val prediction = dlModel.score(sampleFrame)
       val estimates = prediction.vecs() map (_.at(0)) toList
       val estimate: Double = estimates(1)
       println(s"$msg -> $estimate // $estimates")
-      estimate < hamThreshold
+      estimate < .5
     }
 
   }
@@ -191,14 +162,11 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
   /** Builds DeepLearning model. */
   def buildDLModel(train: Frame, valid: Frame,
                    epochs: Int = 10, l1: Double = 0.001,
-                   hidden: Array[Int] = Array[Int](200, 200))
-                  (implicit h2oContext: H2OContext): DeepLearningModel = {
-    import h2oContext.implicits._
-    // Build a model
+                   hidden: Array[Int] = Array[Int](200, 200)): DeepLearningModel = {
     val dlParams = new DeepLearningParameters()
-    dlParams._train = train
-    dlParams._valid = valid
-    dlParams._response_column = 'target
+    dlParams._train = train._key
+    dlParams._valid = valid._key
+    dlParams._response_column = "target"
     dlParams._epochs = epochs
     dlParams._l1 = l1
     dlParams._hidden = hidden
@@ -308,16 +276,74 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     
     h1
   }
+
+
+  /** A numeric Vec from an array of doubles */
+  def dvec(values: Iterable[Double]): Vec = {
+    val k: Key[Vec] = Vec.VectorGroup.VG_LEN1.addVec()
+    val avec: AppendableVec = new AppendableVec(k, Vec.T_NUM)
+    val chunk: NewChunk = new NewChunk(avec, 0)
+    for (r <- values) chunk.addNum(r)
+//    assert(chunk == avec.chunkForChunkIdx(0))
+    commit(avec, chunk)
+  }
+
+  def commit(avec: AppendableVec, chunk: NewChunk): Vec = {
+    val fs: Futures = new Futures
+    chunk.close(0, fs)
+    val vec: Vec = avec.layout_and_close(fs)
+    fs.blockForPending()
+    vec
+  }
+
+  def vec(domain: Array[String], rows: Iterable[Int]): Vec = {
+    val k: Key[Vec] = Vec.VectorGroup.VG_LEN1.addVec()
+    val avec: AppendableVec = new AppendableVec(k, Vec.T_NUM)
+    avec.setDomain(domain)
+    val chunk: NewChunk = new NewChunk(avec, 0)
+    for (r <- rows) chunk.addNum(r)
+    commit(avec, chunk)
+  }
+
+  def cvec(domain: Array[String], rows: Iterable[String]): Vec = {
+    val indexes = rows map domain.indexOf
+    vec(domain, indexes)
+  }
+  
+  val CatDomain = "ham"::"spam"::Nil toArray
+
+  case class CatSMS(target: Int, fv: Array[Double]) {
+    def this(sms: TrainingRow) = this(CatDomain indexOf sms.target, sms.fv)
+    def name(i: Int) = "fv" + i
+    def names: Array[String] = ("target" :: (fv.indices map name).toList) toArray
+    def xx = "1"
+  }
+
+  def catVecs(rows:Iterable[CatSMS]): Array[Vec] = {
+    val row0 = rows.head
+    val targetVec = vec(CatDomain, rows map (_.target))
+    val vecs = row0.fv.indices.map(
+      i => dvec(rows map (_.fv(i))))
+    
+    (targetVec :: vecs.toList) toArray
+  }
+
+  /** Training message representation. */
+  case class TrainingRow(target: String, fv: Array[Double]) {
+    def name(i: Int) = "fv" + i
+    def names: Array[String] = ("target" :: (fv.indices map name).toList) toArray
+  }
+
+  case class DataInside(fv: Array[Double]) {
+    def name(i: Int) = "fv" + i
+
+    def names: Array[String] = fv.indices map name toArray
+    
+    def vecs: Array[Vec] = fv map (x => dvec(x::Nil))
+    
+    def frame: Frame = new Frame(names, vecs)
+  }
 }
-
-case class CatSMS(target: Int, fv: Array[Double]) {
-  def this(sms: TrainingRow) = this("ham"::"spam"::Nil indexOf sms.target, sms.fv)
-}
-
-/** Training message representation. */
-case class TrainingRow(target: String, fv: Array[Double])
-
-case class DataInside(fv: Array[Double])
 
 /** Document frequency aggregator. */
 class DocumentFrequencyAggregator(size: Int) extends Serializable {
