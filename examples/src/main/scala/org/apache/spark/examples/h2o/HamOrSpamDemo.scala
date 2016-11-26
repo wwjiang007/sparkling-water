@@ -25,7 +25,6 @@ import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import hex.deeplearning.{DeepLearning, DeepLearningModel}
 import org.apache.spark._
 import org.apache.spark.h2o._
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import sun.misc.Unsafe
 import water.fvec.Vec
@@ -43,6 +42,7 @@ import scala.reflect.ClassTag
  */
 object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H2OFrameSupport{
   val numFeatures = 1024
+  // type Vector = Array[Double] // does not work with Spark, catalyst reflection is not good enough
   
   val DATAFILE="smsData.txt"
   val TEST_MSGS = Seq(
@@ -149,9 +149,9 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     lazy val idf0:DocumentFrequencyAggregator = 
       (new DocumentFrequencyAggregator(numFeatures) /: tf)(_ + _)
     
-    lazy val modelIdf: Vector = idf0.idf(minDocFreq)
+    lazy val modelIdf: Array[Double] = idf0.idf(minDocFreq)
 
-    lazy val weights: List[Vector] = tf map idfNormalize(modelIdf)
+    lazy val weights: List[Array[Double]] = tf map idfNormalize(modelIdf)
     
     def weigh(msg: String): Array[Double] = weighWords(tokenize(msg).toList)
 
@@ -166,8 +166,8 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
       val  hamThreshold: Double = 0.5
       val weighted:RDD[Array[Double]] = toSC(sc, Seq(weights))
 
-      val msgVector = toSC(sc, Seq(VectorInside(normalizedWeights))).toDF
-      val msgTable: H2OFrame = msgVector
+      val msgDF = toSC(sc, Seq(DataInside(normalizedWeights))).toDF
+      val msgTable: H2OFrame = msgDF
       val prediction = dlModel.score(msgTable)
       val estimates = prediction.vecs() map (_.at(0)) toList
       val estimate: Double = estimates(1)
@@ -184,13 +184,8 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     * @param values a term frequency vector
     * @return a TF-IDF vector
     */
-  def idfNormalize(idf: Vector)(values: Array[Double]): Vector = {
-    val n = values.size
-    val newValues = new Array[Double](n)
-    for {
-      j <- values.indices
-    } newValues(j) = values(j) * idf(j)
-    Vectors.dense(newValues)
+  def idfNormalize(idf: Array[Double])(values: Array[Double]): Array[Double] = {
+    values zip idf map {case(x,y) => x*y}
   }
   
   /** Builds DeepLearning model. */
@@ -214,16 +209,20 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
   }
   
   def mod(i: Int, n: Int) = ((i % n) + n) % n
+  
+  def arrayFrom(map: Map[Int, Double], size: Int): Array[Double] = {
+    0 until size map (i => map.getOrElse(i, 0.0)) toArray
+  }
 
   def weighWords(document: Iterable[String]): Array[Double] = {
-    val termFrequencies = scala.collection.mutable.HashMap.empty[Int, Double]
+    val termFrequencies = scala.collection.mutable.Map.empty[Int, Double]
     document.foreach { term =>
       val i = mod(murmur3(term), numFeatures)
       val count = termFrequencies.getOrElse(i, 0.0) + 1.0
       termFrequencies.put(i, count)
     }
 
-    Vectors.sparse(numFeatures, termFrequencies.toSeq).toDense.values
+    arrayFrom(termFrequencies.toMap, numFeatures)
   }
 
   def murmur3(s: String): Int = {
@@ -311,14 +310,14 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
   }
 }
 
-case class CatSMS(target: Int, fv: mllib.linalg.Vector) {
+case class CatSMS(target: Int, fv: Array[Double]) {
   def this(sms: TrainingRow) = this("ham"::"spam"::Nil indexOf sms.target, sms.fv)
 }
 
 /** Training message representation. */
-case class TrainingRow(target: String, fv: mllib.linalg.Vector)
+case class TrainingRow(target: String, fv: Array[Double])
 
-case class VectorInside(fv: mllib.linalg.Vector)
+case class DataInside(fv: Array[Double])
 
 /** Document frequency aggregator. */
 class DocumentFrequencyAggregator(size: Int) extends Serializable {
@@ -330,16 +329,9 @@ class DocumentFrequencyAggregator(size: Int) extends Serializable {
 
   def this() = this(0)
 
-  /** Adds a new document. */
-  def +(doc: Vector): this.type = {
-    doc.foreachActive((i,v) => if (v > 0) df(i) += 1)
-    m += 1L
-    this
-  }
-
-  /** Adds a new document. */
+  /** Adds a new frequency vector. */
   def +(doc: Array[Double]): this.type = {
-    for { i <- doc.indices} if (doc(i) > 0) df(i) += 1
+    for { i <- doc.indices } if (doc(i) > 0) df(i) += 1
 
     m += 1L
     this
@@ -362,11 +354,12 @@ class DocumentFrequencyAggregator(size: Int) extends Serializable {
   private def isEmpty: Boolean = m == 0L
 
   /** Returns the current IDF vector. */
-  def idf(minDocFreq: Int): Vector = {
+  def idf(minDocFreq: Int): Array[Double] = {
     if (isEmpty) {
       throw new IllegalStateException("Haven't seen any document yet.")
     }
     val inv = df map (x => if (x >= minDocFreq) math.log((m + 1.0) / (x + 1.0)) else 0)
-    Vectors.dense(inv)
+
+    inv
   }
 }
