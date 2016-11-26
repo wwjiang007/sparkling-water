@@ -17,16 +17,17 @@
 
 package org.apache.spark.examples.h2o
 
-import breeze.linalg.{DenseVector => BDV}
+import java.lang.reflect.Field
+import java.nio.charset.StandardCharsets
+
 import hex.ModelMetricsBinomial
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import hex.deeplearning.{DeepLearning, DeepLearningModel}
 import org.apache.spark._
 import org.apache.spark.h2o._
-import org.apache.spark.mllib.feature.{HashingTF, IDFModel}
-import org.apache.spark.mllib.linalg
-import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vector, Vectors}
+import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
+import sun.misc.Unsafe
 import water.fvec.Vec
 import water.support.{H2OFrameSupport, ModelMetricsSupport, SparkContextSupport}
 
@@ -69,19 +70,15 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     val spamModel = new SpamModel(msgs)
     
     val trainingRows = hs zip spamModel.weights map TrainingRow.tupled
-    val idfModel = spamModel.idfModel
 
     val categorizedSMSs = trainingRows map (new CatSMS(_))
     val cutoff = (trainingRows.length * 0.8).toInt
+    // Split table
     val (before, after) = trainingRows.splitAt(cutoff)
     val train = buildTable(sc, before)
     val valid = buildTable(sc, after)
 //    val inrdd = resultRDD.take(size).toList
     
-    // Split table
-    val keys = Array[String]("train.hex", "valid.hex")
-    val ratios = Array[Double](0.8)
-    // Build a model
     val dlModel = buildDLModel(train, valid)
 
     // Collect model metrics
@@ -142,24 +139,21 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
 
     words.toSeq
   }
-
-  val hashingTF = new HashingTF(numFeatures)
   
   case class SpamModel(msgs: List[String]) {
-    val words = msgs map tokenize
     val minDocFreq:Int = 4
-    lazy val tf: List[linalg.Vector] = msgs map weigh
+
+    lazy val tf: List[Array[Double]] = msgs map weigh
+    
     // Build term frequency-inverse document frequency
-    lazy val idf0:DocumentFrequencyAggregator = (new DocumentFrequencyAggregator(numFeatures) /: tf)(_ + _)
+    lazy val idf0:DocumentFrequencyAggregator = 
+      (new DocumentFrequencyAggregator(numFeatures) /: tf)(_ + _)
+    
     lazy val modelIdf: Vector = idf0.idf(minDocFreq)
-    lazy val idfModel = new IDFModel(modelIdf)
 
     lazy val weights: List[Vector] = tf map idfNormalize(modelIdf)
     
-    def weigh(msg: String): Vector = {
-      val words = tokenize(msg)
-      hashingTF.transform(words)
-    }
+    def weigh(msg: String): Array[Double] = weighWords(tokenize(msg).toList)
 
     /** Spam detector */
     def isSpam(sc: SparkContext,
@@ -168,10 +162,11 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
       import h2oContext.implicits._
       import sqlContext.implicits._
       val weights = weigh(msg)
+      val normalizedWeights =idfNormalize(modelIdf)(weights)
       val  hamThreshold: Double = 0.5
-      val weighted = sc.parallelize(Seq(weights))
-      val msgVector: DataFrame = idfModel.transform(weighted
-      ).map(v => VectorInside(v)).toDF
+      val weighted:RDD[Array[Double]] = toSC(sc, Seq(weights))
+
+      val msgVector = toSC(sc, Seq(VectorInside(normalizedWeights))).toDF
       val msgTable: H2OFrame = msgVector
       val prediction = dlModel.score(msgTable)
       val estimates = prediction.vecs() map (_.at(0)) toList
@@ -186,28 +181,16 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     * Transforms a term frequency (TF) vector to a TF-IDF vector with a IDF vector
     *
     * @param idf an IDF vector
-    * @param v a term frequency vector
+    * @param values a term frequency vector
     * @return a TF-IDF vector
     */
-  def idfNormalize(idf: Vector)(v: Vector): Vector = {
-    val n = v.size
-    v match {
-      case SparseVector(size, indices, values) =>
-        val newValues = for { (i, v) <-  indices zip values} yield idf(i) * v
-
-        Vectors.sparse(n, indices, newValues)
-      case DenseVector(values) =>
-        val newValues = new Array[Double](n)
-        var j = 0
-        while (j < n) {
-          newValues(j) = values(j) * idf(j)
-          j += 1
-        }
-        Vectors.dense(newValues)
-      case other =>
-        throw new UnsupportedOperationException(
-          s"Only sparse and dense vectors are supported but got ${other.getClass}.")
-    }
+  def idfNormalize(idf: Vector)(values: Array[Double]): Vector = {
+    val n = values.size
+    val newValues = new Array[Double](n)
+    for {
+      j <- values.indices
+    } newValues(j) = values(j) * idf(j)
+    Vectors.dense(newValues)
   }
   
   /** Builds DeepLearning model. */
@@ -228,6 +211,103 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     // Create a job
     val dl = new DeepLearning(dlParams, water.Key.make("dlModel.hex"))
     dl.trainModel.get
+  }
+  
+  def mod(i: Int, n: Int) = ((i % n) + n) % n
+
+  def weighWords(document: Iterable[String]): Array[Double] = {
+    val termFrequencies = scala.collection.mutable.HashMap.empty[Int, Double]
+    document.foreach { term =>
+      val i = mod(murmur3(term), numFeatures)
+      val count = termFrequencies.getOrElse(i, 0.0) + 1.0
+      termFrequencies.put(i, count)
+    }
+
+    Vectors.sparse(numFeatures, termFrequencies.toSeq).toDense.values
+  }
+
+  def murmur3(s: String): Int = {
+    val seed = 42
+    val bytes = s.getBytes(StandardCharsets.UTF_8)
+    hashUnsafeBytes(bytes, BYTE_ARRAY_OFFSET, bytes.length, seed)
+  }
+
+  private val _UNSAFE: Unsafe = {
+    var unsafe: Unsafe = null
+    try {
+      val unsafeField: Field = classOf[Unsafe].getDeclaredField("theUnsafe")
+      unsafeField.setAccessible(true)
+       unsafeField.get(null).asInstanceOf[Unsafe]
+    }
+    catch {
+      case cause: Throwable => {
+        null
+      }
+    }
+  }
+  val BYTE_ARRAY_OFFSET = _UNSAFE.arrayBaseOffset(classOf[Array[Byte]])
+
+  def getInt(x: AnyRef, offset: Long): Int = {
+    return _UNSAFE.getInt(x, offset)
+  }
+
+  def getByte(x: AnyRef, offset: Long): Byte = {
+    return _UNSAFE.getByte(x, offset)
+  }
+
+  def hashUnsafeBytes(base: AnyRef, offset: Long, lengthInBytes: Int, seed: Int): Int = {
+    assert((lengthInBytes >= 0), "lengthInBytes cannot be negative")
+    val lengthAligned: Int = lengthInBytes - lengthInBytes % 4
+    var h1: Int = hashBytesByInt(base, offset, lengthAligned, seed)
+
+    for {
+      i <- lengthAligned until lengthInBytes
+    } {
+      val halfWord: Int = getByte(base, offset + i)
+      val k1: Int = mixK1(halfWord)
+      h1 = mixH1(h1, k1)
+    }
+    
+    fmix(h1, lengthInBytes)
+  }
+
+  private def mixH1(h1: Int, k1: Int): Int = {
+    val h2 = h1 ^ k1
+    val h3 = Integer.rotateLeft(h2, 13)
+    val h4 = h3 * 5 + 0xe6546b64
+    return h4
+  }
+
+  private val C1: Int = 0xcc9e2d51
+  private val C2: Int = 0x1b873593
+
+  private def mixK1(k1: Int): Int = {
+    val k2 = k1 * C1
+    val k3 = Integer.rotateLeft(k2, 15)
+    val k4 = k3 * C2
+    return k4
+  }
+
+  private def fmix (h1: Int, length: Int): Int = {
+    val h2 = h1 ^ length
+    val h3 = h2 ^ (h2 >>> 16)
+    val h4 = h3 * 0x85ebca6b
+    val h5 = h4 ^ (h4 >>> 13)
+    val h6 = h5 * 0xc2b2ae35
+    h6 ^ (h6 >>> 16)
+  }
+
+  private def hashBytesByInt(base: AnyRef, offset: Long, lengthInBytes: Int, seed: Int): Int = {
+    assert((lengthInBytes % 4 == 0))
+    var h1: Int = seed
+
+    for { i <- 0 until lengthInBytes by 4} {
+      val halfWord: Int = getInt(base, offset + i)
+      val k1: Int = mixK1(halfWord)
+      h1 = mixH1(h1, k1)
+    }
+    
+    h1
   }
 }
 
@@ -253,6 +333,14 @@ class DocumentFrequencyAggregator(size: Int) extends Serializable {
   /** Adds a new document. */
   def +(doc: Vector): this.type = {
     doc.foreachActive((i,v) => if (v > 0) df(i) += 1)
+    m += 1L
+    this
+  }
+
+  /** Adds a new document. */
+  def +(doc: Array[Double]): this.type = {
+    for { i <- doc.indices} if (doc(i) > 0) df(i) += 1
+
     m += 1L
     this
   }
