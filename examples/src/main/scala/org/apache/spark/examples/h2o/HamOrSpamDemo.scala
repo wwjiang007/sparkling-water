@@ -17,22 +17,17 @@
 
 package org.apache.spark.examples.h2o
 
-import java.lang.reflect.Field
-import java.nio.charset.StandardCharsets
-
-import hex.ModelMetricsBinomial
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import hex.deeplearning.{DeepLearning, DeepLearningModel}
 import org.apache.spark._
+import org.apache.spark.examples.h2o.Murmur._
 import org.apache.spark.h2o._
-import sun.misc.Unsafe
-import water.fvec.{AppendableVec, NewChunk, Vec}
-import water.support.{H2OFrameSupport, ModelMetricsSupport, SparkContextSupport}
+import water.fvec.{Frame, AppendableVec, NewChunk, Vec}
+import water.support.{H2OFrameSupport, SparkContextSupport}
 import water.{Futures, Key}
 
 import scala.io.Source
 import scala.language.postfixOps
-import scala.reflect.ClassTag
 
 /**
  * Demo for NYC meetup and MLConf 2015.
@@ -40,25 +35,28 @@ import scala.reflect.ClassTag
  * It predicts spam text messages.
  * Training dataset is available in the file smalldata/smsData.txt.
  */
-object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H2OFrameSupport{
+object HamOrSpamDemo 
+  extends SparkContextSupport 
+    with H2OFrameSupport {
   val numFeatures = 1024
   // type Vector = Array[Double] // does not work with Spark, catalyst reflection is not good enough
   
   val DATAFILE="smsData.txt"
   val TEST_MSGS = Seq(
     "Michal, beer tonight in MV?",
-    "penis extension, our exclusive offer of penis extension",
+    "penis enlargement, our exclusive offer of penis enlargement, enlarge one, enlarge one free",
     "We tried to contact you re your reply to our offer of a Video Handset? 750 anytime any networks mins? UNLIMITED TEXT?"
   )
-
-  def toSC[X: ClassTag](sc: SparkContext, src: Seq[X]) = sc.parallelize[X](src)
 
   def main(args: Array[String]) {
     val conf: SparkConf = configure("Sparkling Water Meetup: Ham or Spam (spam text messages detector)")
     // Create SparkContext to execute application on Spark cluster
     val sc = new SparkContext(conf)
-    // Initialize H2O context
-    implicit val h2oContext = H2OContext.getOrCreate(sc)
+    val conf1: H2OConf = new H2OConf(sc)
+    val h2oContext = new H2OContext(sc, conf1)
+// Initialize H2O context
+      H2OContext.instantiatedContext.set(h2oContext)
+      h2oContext.init()
     
     try {
       // Data load
@@ -74,22 +72,24 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
       val cutoff = (categorizedSMSs.length * 0.8).toInt
       // Split table
       val (before, after) = categorizedSMSs.splitAt(cutoff)
-      val train = buildTable(before)
-      val valid = buildTable(after)
+      val train = buildTable("train", before)
+      val valid = buildTable("valid", after)
 
       val dlModel = buildDLModel(train, valid)
 
-      // Collect model metrics
-      val trainMetrics = modelMetrics[ModelMetricsBinomial](dlModel, train)
-      val validMetrics = modelMetrics[ModelMetricsBinomial](dlModel, valid)
-      println(
-        """
-         |AUC on train data = ${trainMetrics.auc}
-         |AUC on valid data = ${validMetrics.auc}
-      """.stripMargin)
+//      // Collect model metrics
+//      val trainMetrics = modelMetrics[ModelMetricsBinomial](dlModel, train)
+//      val validMetrics = modelMetrics[ModelMetricsBinomial](dlModel, valid)
+//      println(
+//        """
+//         |AUC on train data = ${trainMetrics.auc}
+//         |AUC on valid data = ${validMetrics.auc}
+//      """.stripMargin)
 
     val isSpam = spamModel.isSpam(dlModel)
-    TEST_MSGS.foreach(msg => { println("$msg is " + (if (isSpam(msg)) "SPAM" else "HAM"))
+    TEST_MSGS.foreach(msg => { 
+      val whatitis = if (isSpam(msg)) "SPAM" else "HAM"
+      println(s"$msg is $whatitis")
     })
     } finally {
       // Shutdown Spark cluster and H2O
@@ -97,8 +97,9 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     }
   }
 
-  def buildTable(trainingRows: List[CatSMS]): H2OFrame = {
-    new H2OFrame(new Frame(trainingRows.head.names, catVecs(trainingRows)))
+  def buildTable(id: String, trainingRows: List[CatSMS]): Frame = {
+    val fr = new Frame(trainingRows.head.names, catVecs(trainingRows))
+    new water.fvec.H2OFrame(fr)
   }
 
   def readSamples(dataFile: String): List[Array[String]] = {
@@ -138,7 +139,7 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     def isSpam(dlModel: DeepLearningModel) = (msg: String) => {
       val weights = weigh(msg)
       val normalizedWeights = normalize(weights)
-      val sampleFrame = DataInside(normalizedWeights).frame
+      val sampleFrame = VectorOfDoubles(normalizedWeights).frame
       val prediction = dlModel.score(sampleFrame)
       val estimates = prediction.vecs() map (_.at(0)) toList
       val estimate: Double = estimates(1)
@@ -176,105 +177,23 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     dl.trainModel.get
   }
   
-  def mod(i: Int, n: Int) = ((i % n) + n) % n
+  def hash(s: String) = murmurMod(numFeatures)(s)
   
   def arrayFrom(map: Map[Int, Double], size: Int): Array[Double] = {
     0 until size map (i => map.getOrElse(i, 0.0)) toArray
   }
 
   def weighWords(document: Iterable[String]): Array[Double] = {
+    val hashes = document map hash
+
     val termFrequencies = scala.collection.mutable.Map.empty[Int, Double]
-    document.foreach { term =>
-      val i = mod(murmur3(term), numFeatures)
+
+    hashes.foreach { i =>
       val count = termFrequencies.getOrElse(i, 0.0) + 1.0
       termFrequencies.put(i, count)
     }
 
     arrayFrom(termFrequencies.toMap, numFeatures)
-  }
-
-  def murmur3(s: String): Int = {
-    val seed = 42
-    val bytes = s.getBytes(StandardCharsets.UTF_8)
-    hashUnsafeBytes(bytes, BYTE_ARRAY_OFFSET, bytes.length, seed)
-  }
-
-  private val _UNSAFE: Unsafe = {
-    var unsafe: Unsafe = null
-    try {
-      val unsafeField: Field = classOf[Unsafe].getDeclaredField("theUnsafe")
-      unsafeField.setAccessible(true)
-       unsafeField.get(null).asInstanceOf[Unsafe]
-    }
-    catch {
-      case cause: Throwable => {
-        null
-      }
-    }
-  }
-  val BYTE_ARRAY_OFFSET = _UNSAFE.arrayBaseOffset(classOf[Array[Byte]])
-
-  def getInt(x: AnyRef, offset: Long): Int = {
-    return _UNSAFE.getInt(x, offset)
-  }
-
-  def getByte(x: AnyRef, offset: Long): Byte = {
-    return _UNSAFE.getByte(x, offset)
-  }
-
-  def hashUnsafeBytes(base: AnyRef, offset: Long, lengthInBytes: Int, seed: Int): Int = {
-    assert((lengthInBytes >= 0), "lengthInBytes cannot be negative")
-    val lengthAligned: Int = lengthInBytes - lengthInBytes % 4
-    var h1: Int = hashBytesByInt(base, offset, lengthAligned, seed)
-
-    for {
-      i <- lengthAligned until lengthInBytes
-    } {
-      val halfWord: Int = getByte(base, offset + i)
-      val k1: Int = mixK1(halfWord)
-      h1 = mixH1(h1, k1)
-    }
-    
-    fmix(h1, lengthInBytes)
-  }
-
-  private def mixH1(h1: Int, k1: Int): Int = {
-    val h2 = h1 ^ k1
-    val h3 = Integer.rotateLeft(h2, 13)
-    val h4 = h3 * 5 + 0xe6546b64
-    return h4
-  }
-
-  private val C1: Int = 0xcc9e2d51
-  private val C2: Int = 0x1b873593
-
-  private def mixK1(k1: Int): Int = {
-    val k2 = k1 * C1
-    val k3 = Integer.rotateLeft(k2, 15)
-    val k4 = k3 * C2
-    return k4
-  }
-
-  private def fmix (h1: Int, length: Int): Int = {
-    val h2 = h1 ^ length
-    val h3 = h2 ^ (h2 >>> 16)
-    val h4 = h3 * 0x85ebca6b
-    val h5 = h4 ^ (h4 >>> 13)
-    val h6 = h5 * 0xc2b2ae35
-    h6 ^ (h6 >>> 16)
-  }
-
-  private def hashBytesByInt(base: AnyRef, offset: Long, lengthInBytes: Int, seed: Int): Int = {
-    assert((lengthInBytes % 4 == 0))
-    var h1: Int = seed
-
-    for { i <- 0 until lengthInBytes by 4} {
-      val halfWord: Int = getInt(base, offset + i)
-      val k1: Int = mixK1(halfWord)
-      h1 = mixH1(h1, k1)
-    }
-    
-    h1
   }
 
 
@@ -334,7 +253,7 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     def names: Array[String] = ("target" :: (fv.indices map name).toList) toArray
   }
 
-  case class DataInside(fv: Array[Double]) {
+  case class VectorOfDoubles(fv: Array[Double]) {
     def name(i: Int) = "fv" + i
 
     def names: Array[String] = fv.indices map name toArray
@@ -345,47 +264,4 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
   }
 }
 
-/** Document frequency aggregator. */
-class DocumentFrequencyAggregator(size: Int) extends Serializable {
 
-  /** number of documents */
-  private var m = 0L
-  /** document frequency vector */
-  private var df: Array[Long] = new Array[Long](size)
-
-  def this() = this(0)
-
-  /** Adds a new frequency vector. */
-  def +(doc: Array[Double]): this.type = {
-    for { i <- doc.indices } if (doc(i) > 0) df(i) += 1
-
-    m += 1L
-    this
-  }
-
-  /** Merges another. */
-  def merge(other: DocumentFrequencyAggregator): this.type = {
-    if (!other.isEmpty) {
-      if (isEmpty) {
-        df = new Array[Long](other.df.length)
-        Array.copy(other.df, 0, df, 0, length = other.df.length)
-      } else {
-        df.indices foreach (i => df(i) += other.df(i))
-      }
-      m += other.m
-    }
-    this
-  }
-
-  private def isEmpty: Boolean = m == 0L
-
-  /** Returns the current IDF vector. */
-  def idf(minDocFreq: Int): Array[Double] = {
-    if (isEmpty) {
-      throw new IllegalStateException("Haven't seen any document yet.")
-    }
-    val inv = df map (x => if (x >= minDocFreq) math.log((m + 1.0) / (x + 1.0)) else 0)
-
-    inv
-  }
-}
