@@ -17,6 +17,8 @@
 
 package org.apache.spark.h2o.backends.internal
 
+import java.sql.Timestamp
+
 import org.apache.spark.h2o.converters.ReadConverterCtx
 import water.fvec.{Chunk, Frame, Vec}
 import water.parser.BufferedString
@@ -51,9 +53,15 @@ class InternalReadConverterCtx(override val keyName: String, override val chunkI
       if (chunk.isNA(rowIdx)) ifMissing(s"Row $rowIdx column $columnNum") else read(chunk)
   }
 
-  override def longAt(source: DataSource) = source.at8(rowIdx)
-  override def doubleAt(source: DataSource) = source.atd(rowIdx)
-  override def string(source: DataSource) = StringProviders(source.vec().get_type())(source)
+  override protected def booleanAt(source: Chunk): Boolean = longAt(source) == 1
+  override protected def byteAt(source: Chunk): Byte = longAt(source).toByte
+  override protected def shortAt(source: Chunk): Short = longAt(source).toShort
+  override protected def intAt(source: Chunk): Int = longAt(source).toInt
+  override protected def longAt(source: DataSource) = source.at8(rowIdx)
+  override protected def floatAt(source: Chunk): Float = doubleAt(source).toFloat
+  override protected def doubleAt(source: DataSource) = source.atd(rowIdx)
+  override protected def string(source: DataSource) = StringProviders(source.vec().get_type())(source)
+  override protected def timestamp(source: Chunk): Timestamp = new Timestamp(longAt(source) * 1000)
 
   private def categoricalString(source: DataSource) = source.vec().domain()(longAt(source).toInt)
   private def uuidString(source: DataSource) = new java.util.UUID(source.at16h(rowIdx), source.at16l(rowIdx)).toString

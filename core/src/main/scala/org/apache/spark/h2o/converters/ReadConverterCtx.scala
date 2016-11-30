@@ -17,6 +17,8 @@
 
 package org.apache.spark.h2o.converters
 
+import java.sql.Timestamp
+
 import org.apache.spark.h2o.utils.ReflectionUtils._
 import org.apache.spark.h2o.utils.SupportedTypes
 import org.apache.spark.h2o.utils.SupportedTypes._
@@ -78,18 +80,17 @@ trait ReadConverterCtx {
     */
   protected def returnSimple[T](ifMissing: String => T, read: DataSource => T)(columnNum: Int): T
 
+  protected def booleanAt(source: DataSource): Boolean
+  protected def byteAt(source: DataSource): Byte
+  protected def shortAt(source: DataSource): Short
+  protected def intAt(source: DataSource): Int
   protected def longAt(source: DataSource): Long
+  protected def floatAt(source: DataSource): Float
   protected def doubleAt(source: DataSource): Double
-  protected def booleanAt(source: DataSource) = longAt(source) == 1
-  protected def byteAt(source: DataSource) = longAt(source).toByte
-  protected def intAt(source: DataSource) = longAt(source).toInt
-  protected def shortAt(source: DataSource) = longAt(source).toShort
-  protected def floatAt(source: DataSource) = longAt(source).toFloat
-  // TODO(vlad): take care of this bad typing
-  protected def timestamp(source: DataSource) = longAt(source) * 1000L
   protected def string(source: DataSource): String
   // TODO(vlad): check if instead of stringification, we could use bytes
   protected def utfString(source: DataSource) = UTF8String.fromString(string(source))
+  protected def timestamp(source: DataSource): Timestamp
 
   /**
     * This map registers for each type corresponding extractor
@@ -103,14 +104,14 @@ trait ReadConverterCtx {
   protected lazy val ExtractorsTable: Map[SimpleType[_], DataSource => _] = Map(
     Boolean    -> booleanAt _,
     Byte       -> byteAt _,
-    Double     -> doubleAt _,
-    Float      -> floatAt _,
+    Short      -> shortAt _,
     Integer    -> intAt _,
     Long       -> longAt _,
-    Short      -> shortAt _,
+    Float      -> floatAt _,
+    Double     -> doubleAt _,
     String     -> string _,
     UTF8       -> utfString _,
-    Timestamp  -> timestamp _
+    SupportedTypes.Timestamp  -> timestamp _
   )
 
   private lazy val OptionReadersMap: Map[OptionalType[_], OptionReader] =

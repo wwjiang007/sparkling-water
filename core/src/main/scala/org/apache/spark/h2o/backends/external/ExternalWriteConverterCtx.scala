@@ -24,7 +24,7 @@ import water.ExternalFrameWriterClient
 
 class ExternalWriteConverterCtx(nodeDesc: NodeDesc, totalNumOfRows: Int) extends WriteConverterCtx {
 
-  val socketChannel = ConnectionToH2OHelper.getOrCreateConnection(nodeDesc)
+  val socketChannel = ConnectionToH2OPool.getOrCreateConnection(nodeDesc)
   val externalFrameWriter = new ExternalFrameWriterClient(socketChannel)
 
   /**
@@ -35,7 +35,7 @@ class ExternalWriteConverterCtx(nodeDesc: NodeDesc, totalNumOfRows: Int) extends
       externalFrameWriter.waitUntilAllWritten()
     }finally {
       if(socketChannel.isOpen){
-        ConnectionToH2OHelper.putAvailableConnection(nodeDesc, socketChannel)
+        ConnectionToH2OPool.putAvailableConnection(nodeDesc, socketChannel)
       }
     }
   }

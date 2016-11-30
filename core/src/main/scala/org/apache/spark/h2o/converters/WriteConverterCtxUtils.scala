@@ -19,7 +19,7 @@ package org.apache.spark.h2o.converters
 
 import org.apache.spark.{IteratorWithFullSize, TaskContext}
 import org.apache.spark.h2o.{H2OContext, _}
-import org.apache.spark.h2o.backends.external.ExternalWriteConverterCtx
+import org.apache.spark.h2o.backends.external.{ConnectionToH2OPool, ExternalWriteConverterCtx}
 import org.apache.spark.h2o.backends.internal.InternalWriteConverterCtx
 import org.apache.spark.h2o.utils.NodeDesc
 import water.{DKV, ExternalFrameUtils, Key}
@@ -81,19 +81,20 @@ object WriteConverterCtxUtils {
     }
 
     val operation: SparkJob[T] = func(keyName, vecTypes, uploadPlan)
+   ConnectionToH2OPool.withConnections(preparedRDD) {
+      val rows = hc.sparkContext.runJob(preparedRDD, operation) // eager, not lazy, evaluation
+      val res = new Array[Long](preparedRDD.partitions.length)
+      rows.foreach { case (cidx, nrows) => res(cidx) = nrows }
+      // Add Vec headers per-Chunk, and finalize the H2O Frame
 
-    val rows = hc.sparkContext.runJob(preparedRDD, operation) // eager, not lazy, evaluation
-    val res = new Array[Long](preparedRDD.partitions.length)
-    rows.foreach { case (cidx,  nrows) => res(cidx) = nrows }
-    // Add Vec headers per-Chunk, and finalize the H2O Frame
-
-    // get the vector types from expected types in case of external h2o cluster
-    val types = if(hc.getConf.runsInExternalClusterMode){
-      ExternalFrameUtils.vecTypesFromExpectedTypes(vecTypes)
-    }else{
-      vecTypes
+      // get the vector types from expected types in case of external h2o cluster
+      val types = if (hc.getConf.runsInExternalClusterMode) {
+        ExternalFrameUtils.vecTypesFromExpectedTypes(vecTypes)
+      } else {
+        vecTypes
+      }
+      new H2OFrame(finalizeFrame(keyName, res, types))
     }
-    new H2OFrame(finalizeFrame(keyName, res, types))
   }
 
   private def initFrame[T](keyName: String, names: Array[String]):Unit = {

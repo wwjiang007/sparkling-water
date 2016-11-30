@@ -18,6 +18,8 @@
 package org.apache.spark.h2o.backends.external
 
 
+import java.sql.Timestamp
+
 import org.apache.spark.h2o.converters.ReadConverterCtx
 import org.apache.spark.h2o.utils.NodeDesc
 import water.ExternalFrameReaderClient
@@ -32,7 +34,7 @@ class ExternalReadConverterCtx(override val keyName: String, override val chunkI
   extends ReadConverterCtx {
   override type DataSource = ExternalFrameReaderClient
 
-  private val socketChannel = ConnectionToH2OHelper.getOrCreateConnection(nodeDesc)
+  private val socketChannel = ConnectionToH2OPool.getOrCreateConnection(nodeDesc)
   val externalFrameReader = new ExternalFrameReaderClient(socketChannel, keyName, chunkIdx, selectedColumnIndices, expectedTypes)
 
   override def numRows: Int = externalFrameReader.getNumRows
@@ -46,16 +48,22 @@ class ExternalReadConverterCtx(override val keyName: String, override val chunkI
     if (externalFrameReader.isLastNA) ifMissing(s"Row $rowIdx column $columnNum") else value
   }
 
-  override def longAt(source: DataSource): Long = source.readLong()
-  override def doubleAt(source: DataSource): Double = source.readDouble()
-  override def string(source: DataSource) = source.readString()
+  override protected def booleanAt(source: ExternalFrameReaderClient): Boolean = source.readBoolean()
+  override protected def byteAt(source: ExternalFrameReaderClient): Byte = source.readByte()
+  override protected def shortAt(source: ExternalFrameReaderClient): Short = source.readShort()
+  override protected def intAt(source: ExternalFrameReaderClient): Int = source.readInt()
+  override protected def longAt(source: DataSource): Long = source.readLong()
+  override protected def floatAt(source: ExternalFrameReaderClient): Float = source.readFloat()
+  override protected def doubleAt(source: DataSource): Double = source.readDouble()
+  override protected def string(source: DataSource) = source.readString()
+  override protected def timestamp(source: ExternalFrameReaderClient): Timestamp = source.readTimestamp()
 
   override def hasNext: Boolean = {
     val isNext = super.hasNext
     if(!isNext){
       externalFrameReader.waitUntilAllReceived()
       // put back socket channel to pool of opened connections after we get the last element
-      ConnectionToH2OHelper.putAvailableConnection(nodeDesc, socketChannel)
+      ConnectionToH2OPool.putAvailableConnection(nodeDesc, socketChannel)
     }
     isNext
   }
