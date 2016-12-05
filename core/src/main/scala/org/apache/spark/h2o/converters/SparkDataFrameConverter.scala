@@ -29,7 +29,7 @@ import water.fvec.{Frame, H2OFrame}
 
 import scala.collection.immutable
 
-trait SparkDataFrameConverter extends Logging {
+trait SparkDataFrameConverter extends Logging with Serializable {
 
   /**
     * Create a Spark DataFrame from given H2O frame.

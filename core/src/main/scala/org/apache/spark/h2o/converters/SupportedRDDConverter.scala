@@ -29,7 +29,7 @@ import scala.reflect.runtime.universe._
   * This converter just wraps the existing RDD converters and hides the internal RDD converters
   */
 
-trait SupportedRDDConverter{
+trait SupportedRDDConverter extends Serializable{
   /** Transform supported type for conversion to H2OFrame*/
   def toH2OFrame(hc: H2OContext, rdd: SupportedRDD, frameKeyName: Option[String]): H2OFrame = rdd.toH2OFrame(hc, frameKeyName)
 

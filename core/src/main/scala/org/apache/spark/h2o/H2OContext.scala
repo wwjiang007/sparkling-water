@@ -23,13 +23,14 @@ import org.apache.spark._
 import org.apache.spark.h2o.backends.SparklingBackend
 import org.apache.spark.h2o.backends.external.ExternalH2OBackend
 import org.apache.spark.h2o.backends.internal.InternalH2OBackend
+
+
 import org.apache.spark.h2o.converters._
 import org.apache.spark.h2o.utils.{H2OContextUtils, LogUtil, NodeDesc}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import water._
 
-import scala.annotation.meta.{field, param}
 import scala.collection.mutable
 import scala.language.{implicitConversions, postfixOps}
 import scala.reflect.ClassTag
@@ -59,12 +60,11 @@ import scala.util.control.NoStackTrace
   * @param sparkContext Spark Context
   * @param conf H2O configuration
   */
-class H2OContext private (@(transient @param @field) val sparkContext: SparkContext, @(transient @param @field) conf: H2OConf) extends Logging
-  with Serializable with SparkDataFrameConverter with SupportedRDDConverter with DatasetConverter
+class H2OContext private (val sparkContext: SparkContext, conf: H2OConf) extends Logging
   with H2OContextUtils { self =>
 
 
-  @transient val sqlc: SQLContext = SparkSession.builder().getOrCreate().sqlContext
+  val sqlc: SQLContext = SparkSession.builder().getOrCreate().sqlContext
 
   /** IP of H2O client */
   private var localClientIp: String = _
@@ -75,7 +75,7 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
 
 
   /** Used backend */
-  @transient private val backend: SparklingBackend = if(conf.runsInExternalClusterMode){
+  private val backend: SparklingBackend = if(conf.runsInExternalClusterMode){
     new ExternalH2OBackend(this)
   }else{
     new InternalH2OBackend(this)
@@ -86,7 +86,7 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
   // also with regards to used backend and store the fix the state of prepared configuration
   // so it can't be changed anymore
   /** H2O and Spark configuration */
-  @transient val _conf = backend.checkAndUpdateConf(conf).clone()
+  val _conf = backend.checkAndUpdateConf(conf).clone()
 
   /**
     * This method connects to external H2O cluster if spark.ext.h2o.externalClusterMode is set to true,
@@ -119,7 +119,8 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
 
   /** Transforms RDD[Supported type] to H2OFrame */
   def asH2OFrame(rdd: SupportedRDD): H2OFrame = asH2OFrame(rdd, None)
-  def asH2OFrame(rdd: SupportedRDD, frameName: Option[String]): H2OFrame =  toH2OFrame(this, rdd, frameName)
+  def asH2OFrame(rdd: SupportedRDD, frameName: Option[String]): H2OFrame =
+    SupportedRDDConverter.toH2OFrame(this, rdd, frameName)
   def asH2OFrame(rdd: SupportedRDD, frameName: String): H2OFrame = asH2OFrame(rdd, Option(frameName))
 
 
@@ -130,7 +131,8 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
 
   /** Transform DataFrame to H2OFrame */
   def asH2OFrame(df: DataFrame): H2OFrame = asH2OFrame(df, None)
-  def asH2OFrame(df: DataFrame, frameName: Option[String]): H2OFrame = toH2OFrame(this, df, frameName)
+  def asH2OFrame(df: DataFrame, frameName: Option[String]): H2OFrame =
+    SparkDataFrameConverter.toH2OFrame(this, df, frameName)
   def asH2OFrame(df: DataFrame, frameName: String): H2OFrame = asH2OFrame(df, Option(frameName))
 
   /** Transform DataFrame to H2OFrame key */
@@ -140,7 +142,8 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
 
   /** Transforms Dataset[Supported type] to H2OFrame */
   def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T]): H2OFrame = asH2OFrame(ds, None)
-  def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): H2OFrame = toH2OFrame(this, ds,frameName)
+  def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): H2OFrame =
+    DatasetConverter.toH2OFrame(this, ds,frameName)
   def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T], frameName: String): H2OFrame = asH2OFrame(ds, Option(frameName))
 
   /** Transforms Dataset[Supported type] to H2OFrame key */
@@ -160,7 +163,7 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
     * in case we are RDD[T] where T is class defined in REPL. This is because class T is created as inner class
     * and we are not able to create instance of class T without outer scope - which is impossible to get.
     * */
-  def asRDD[A <: Product : TypeTag : ClassTag](fr: H2OFrame): RDD[A] = toRDD[A, H2OFrame](this, fr)
+  def asRDD[A <: Product : TypeTag : ClassTag](fr: H2OFrame): RDD[A] = SupportedRDDConverter.toRDD[A, H2OFrame](this, fr)
 
   /** A generic convert of Frame into Product RDD type
     *
@@ -171,12 +174,14 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
     * This code: hc.asRDD[PUBDEV458Type](rdd) will need to be call as hc.asRDD[PUBDEV458Type].apply(rdd)
     */
   def asRDD[A <: Product : TypeTag : ClassTag] = new {
-    def apply[T <: Frame](fr: T): H2ORDD[A, T] = toRDD[A, T](H2OContext.this, fr)
+    def apply[T <: Frame](fr: T): H2ORDD[A, T] = SupportedRDDConverter.toRDD[A, T](H2OContext.this, fr)
   }
 
   /** Convert given H2O frame into DataFrame type */
-  def asDataFrame[T <: Frame](fr: T, copyMetadata: Boolean = true)(implicit sqlContext: SQLContext): DataFrame = toDataFrame(this, fr, copyMetadata)
-  def asDataFrame(s: String, copyMetadata: Boolean)(implicit sqlContext: SQLContext): DataFrame = toDataFrame(this, new H2OFrame(s), copyMetadata)
+  def asDataFrame[T <: Frame](fr: T, copyMetadata: Boolean = true)(implicit sqlContext: SQLContext): DataFrame =
+  SparkDataFrameConverter.toDataFrame(this, fr, copyMetadata)
+  def asDataFrame(s: String, copyMetadata: Boolean)(implicit sqlContext: SQLContext): DataFrame =
+    SparkDataFrameConverter.toDataFrame(this, new H2OFrame(s), copyMetadata)
 
   /** Returns location of REST API of H2O client */
   def h2oLocalClient = this.localClientIp + ":" + this.localClientPort
@@ -246,7 +251,7 @@ object H2OContext extends Logging {
     }
   }
 
-  @transient private val instantiatedContext = new AtomicReference[H2OContext]()
+  private val instantiatedContext = new AtomicReference[H2OContext]()
 
   /**
     * Tries to get existing H2O Context. If it is not there, ok.
