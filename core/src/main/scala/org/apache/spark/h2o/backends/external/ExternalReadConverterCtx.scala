@@ -56,7 +56,6 @@ class ExternalReadConverterCtx(override val keyName: String, override val chunkI
   override protected def floatAt(source: ExternalFrameReaderClient): Float = source.readFloat()
   override protected def doubleAt(source: DataSource): Double = source.readDouble()
   override protected def string(source: DataSource) = source.readString()
-  override protected def timestamp(source: ExternalFrameReaderClient): Timestamp = source.readTimestamp()
 
   override def hasNext: Boolean = {
     val isNext = super.hasNext

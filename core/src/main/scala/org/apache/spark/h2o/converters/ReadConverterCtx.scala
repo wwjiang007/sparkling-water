@@ -17,7 +17,6 @@
 
 package org.apache.spark.h2o.converters
 
-import java.sql.Timestamp
 
 import org.apache.spark.h2o.utils.ReflectionUtils._
 import org.apache.spark.h2o.utils.SupportedTypes
@@ -90,7 +89,7 @@ trait ReadConverterCtx {
   protected def string(source: DataSource): String
   // TODO(vlad): check if instead of stringification, we could use bytes
   protected def utfString(source: DataSource) = UTF8String.fromString(string(source))
-  protected def timestamp(source: DataSource): Timestamp
+  protected def timestamp(source: DataSource): Long = longAt(source) * 1000
 
   /**
     * This map registers for each type corresponding extractor
@@ -111,7 +110,7 @@ trait ReadConverterCtx {
     Double     -> doubleAt _,
     String     -> string _,
     UTF8       -> utfString _,
-    SupportedTypes.Timestamp  -> timestamp _
+    Timestamp  -> timestamp _
   )
 
   private lazy val OptionReadersMap: Map[OptionalType[_], OptionReader] =

@@ -61,7 +61,6 @@ class InternalReadConverterCtx(override val keyName: String, override val chunkI
   override protected def floatAt(source: Chunk): Float = doubleAt(source).toFloat
   override protected def doubleAt(source: DataSource) = source.atd(rowIdx)
   override protected def string(source: DataSource) = StringProviders(source.vec().get_type())(source)
-  override protected def timestamp(source: Chunk): Timestamp = new Timestamp(longAt(source) * 1000)
 
   private def categoricalString(source: DataSource) = source.vec().domain()(longAt(source).toInt)
   private def uuidString(source: DataSource) = new java.util.UUID(source.at16h(rowIdx), source.at16l(rowIdx)).toString
