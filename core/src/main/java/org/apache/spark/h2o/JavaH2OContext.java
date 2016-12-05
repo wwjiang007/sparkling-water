@@ -277,12 +277,7 @@ which is not nice.
      * backend
      * */
     public H2OFrame asH2OFrameFromPythonRDDLong(JavaRDD<Number> rdd, String frameName){
-        JavaRDD<Long> casted = rdd.map(new Function<Number, Long>() {
-            @Override
-            public Long call(Number v1) throws Exception {
-                return v1.longValue();
-            }
-        });
+        JavaRDD<Long> casted = rdd.map(new RDDLongConversionFunc());
         return asH2OFrameFromRDDLong(casted, frameName);
     }
 
