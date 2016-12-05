@@ -36,7 +36,7 @@ trait ExternalClusterModeTestHelper {
     fail("sparkling.assembly.jar environment variable is not set! It should point to the location of sparkling-water" +
     " assembly JAR")))
 
-  lazy val h2oJar = sys.props.getOrElse("H2O_JAR", sys.env.get("H2O_JAR").getOrElse("H2O_JAR",
+  lazy val h2oJar = sys.props.getOrElse("H2O_JAR", sys.env.getOrElse("H2O_JAR",
     fail("H2O_JAR environment variable is not set! It should point to the location of H2O assembly jar file")))
 
   lazy val clusterStartTimeout = sys.props.getOrElse("cluster.start.timeout", sys.env.getOrElse("cluster.start.timeout", "6000")).toInt
