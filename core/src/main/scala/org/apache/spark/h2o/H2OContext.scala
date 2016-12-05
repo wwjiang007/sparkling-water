@@ -109,9 +109,6 @@ class H2OContext private (@(transient @param @field) val sparkContext: SparkCont
     localClientIp = H2O.SELF_ADDRESS.getHostAddress
     localClientPort = H2O.API_PORT
     logInfo("Sparkling Water started, status of context: " + this)
-
-    // Store this instance so it can be obtained using getOrCreate method
-    H2OContext.setInstantiatedContext(this)
     this
   }
 
@@ -276,8 +273,16 @@ object H2OContext extends Logging {
     */
   def getOrCreate(sc: SparkContext, conf: H2OConf): H2OContext = synchronized {
     if (instantiatedContext.get() == null) {
-      instantiatedContext.set(new H2OContext(sc, conf))
-      instantiatedContext.get().init()
+      if (H2O.API_PORT == 0) { // api port different than 0 means that client is already running
+        instantiatedContext.set(new H2OContext(sc, conf).init())
+      } else {
+        throw new IllegalArgumentException(
+        """
+          |H2O context hasn't been started successfully in the previous attempt and H2O client with previous configuration is already running.
+          |Because of the current H2O limitation that it can't be restarted within a running JVM,
+          |please restart your job or spark session and create new H2O context with new configuration.")
+        """.stripMargin)
+      }
     }
     instantiatedContext.get()
   }
