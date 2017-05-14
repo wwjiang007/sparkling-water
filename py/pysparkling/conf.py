@@ -1,17 +1,27 @@
-
+from pyspark.context import SparkContext
+from pyspark.sql import SparkSession
 from pysparkling.initializer import Initializer
+import warnings
+
 
 class H2OConf(object):
-    def __init__(self, spark_context):
+    def __init__(self, spark):
         try:
-            Initializer.load_sparkling_jar(spark_context)
-            self._do_init(spark_context)
+            spark_session = spark
+            if isinstance(spark, SparkContext):
+                warnings.warn("Method H2OContext.getOrCreate with argument of type SparkContext is deprecated and " +
+                              "parameter of type SparkSession is preferred.")
+                spark_session = SparkSession.builder.getOrCreate()
+
+            Initializer.load_sparkling_jar(spark_session._sc)
+            self._do_init(spark_session)
         except:
             raise
 
 
-    def _do_init(self, spark_context):
-        self._sc = spark_context
+    def _do_init(self, spark_session):
+        self._ss = spark_session
+        self._sc = self._ss._sc
         jvm = self._sc._jvm
         jsc = self._sc._jsc
         # Create instance of H2OConf class
@@ -23,7 +33,6 @@ class H2OConf(object):
         else:
             return None
 
-
     def runs_in_external_cluster_mode(self):
         return self._jconf.runsInExternalClusterMode()
 
@@ -31,7 +40,7 @@ class H2OConf(object):
         return self._jconf.runsInInternalClusterMode()
 
     # setters for most common properties
-    #TODO: Create setters and getters for all properties
+    # TODO: Create setters and getters for all properties
     def set_cloud_name(self, cloud_name):
         self._jconf.setCloudName(cloud_name)
         return self
@@ -49,7 +58,7 @@ class H2OConf(object):
         return self
 
     def set_client_ip(self, ip):
-        self._jconf.setClientIP(ip)
+        self._jconf.setClientIp(ip)
         return self
 
     def set_client_network_mask(self, mask):
@@ -92,7 +101,77 @@ class H2OConf(object):
         self._jconf.useManualClusterStart()
         return self
 
+    def set_h2o_node_log_level(self, level):
+        self._jconf.setH2ONodeLogLevel(level)
+        return self
+
+    def set_cluster_start_timeout(self, timeout):
+        """Set timeout for start of external cluster. If the cluster is not able to cloud within the timeout the
+        the exception is thrown.
+
+        Arguments:
+        timeout -- timeout in seconds
+        
+        """
+        self._jconf.setClusterStartTimeout(timeout)
+        return self
+
+    def set_h2o_client_log_level(self, level):
+        self._jconf.setH2OClientLogLevel(level)
+        return self
+
+    def set_client_connection_timeout(self, timeout):
+        """Set timeout for watchdog client connection in external cluster mode. If the client is not connected to the
+         cluster within the specified time, the cluster kill itself.
+
+        Arguments:
+        timeout -- timeout in milliseconds
+        
+        """
+        self._jconf.setClientConnectionTimeout(timeout)
+        return self
+
+    def set_client_check_retry_timeout(self, timeout):
+        """Set retry interval how often nodes in the external cluster mode check for the presence of the h2o client.
+        
+        Arguments:
+        timeout -- timeout in milliseconds
+        
+        """
+        self._jconf.setClientCheckRetryTimeout(timeout)
+        return self
+
+    def set_external_read_confirmation_timeout(self, timeout):
+        self._jconf.setExternalReadConfirmationTimeout(timeout)
+        return self
+
+    def set_external_write_confirmation_timeout(self, timeout):
+        self._jconf.setExternalWriteConfirmationTimeout(timeout)
+        return self
+
+    def set_ui_update_interval(self, interval):
+        self._jconf.setUiUpdateInterval(interval)
+        return self
+
 # getters
+
+    def ui_update_interval(self):
+        return self._jconf.uiUpdateInterval()
+
+    def client_connection_timeout(self):
+        return self._jconf.clientConnectionTimeout()
+
+    def client_check_retry_timeout(self):
+        return self._jconf.clientCheckRetryTimeout()
+
+    def external_read_confirmation_timeout(self):
+        return self._jconf.externalReadConfirmationTimeout()
+
+    def external_write_confirmation_timeout(self):
+        return self._jconf.externalWriteConfirmationTimeout()
+
+    def cluster_start_timeout(self):
+        return self._jconf.clusterStartTimeout()
 
     def h2o_cluster(self):
         return self._get_option(self._jconf.h2oCluster)
@@ -226,7 +305,6 @@ class H2OConf(object):
     def is_spark_version_check_enabled(self):
         return self._jconf.isSparkVersionCheckEnabled()
 
-
     def set(self, key, value):
         self._jconf.set(key, value)
         return self
@@ -238,21 +316,15 @@ class H2OConf(object):
     def contains(self, key):
         return self._jconf.contains(key)
 
-
-    def get(self, key):
+    def get(self, key, default_value=None):
         """
-        Get a parameter; throws a NoSuchElementException if it's not set
+        Get a parameter, throws a NoSuchElementException if the value
+        is not available and default_value not set
         """
-        return self._jconf.get(key)
-
-
-    def get(self, key, defaultValue):
-        """
-        Get a parameter, falling back to a default if not set
-        """
-        return self._jconf.get(key, defaultValue)
-
-
+        if default_value is None:
+            return self._jconf.get(key)
+        else:
+            return self._jconf.get(key, default_value)
 
     def get_all(self):
         """
@@ -264,7 +336,6 @@ class H2OConf(object):
         for conf in all:
             python_conf.append((conf._1(),conf._2()))
         return python_conf
-
 
     def set_all(self, list_of_configurations):
         """

@@ -32,9 +32,11 @@ import scala.util.Random
 
 class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend with InternalBackendUtils with Logging {
 
+  override def backendUIInfo: Seq[(String, String)] = Seq()
+
   override def stop(stopSparkContext: Boolean): Unit = {
     if (stopSparkContext) hc.sparkContext.stop()
-    H2O.orderlyShutdown(1000)
+    H2O.orderlyShutdown(5000)
     H2O.exit(0)
   }
 
@@ -94,6 +96,10 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
     // Disable web on h2o nodes in non-local mode
     if(!hc.sparkContext.isLocal){
       h2oNodeArgs = h2oNodeArgs ++ Array("-disable_web")
+    }else{
+      // In local mode we don't start h2o client and use standalone h2o mode right away. We need to set login configuration
+      // in this case explicitly
+      h2oNodeArgs = h2oNodeArgs ++ getLoginArgs(hc.getConf)
     }
     logDebug(s"Arguments used for launching h2o nodes: ${h2oNodeArgs.mkString(" ")}")
     val executors = InternalBackendUtils.startH2O(hc.sparkContext, spreadRDD, spreadRDDNodes.length, h2oNodeArgs, hc.getConf.nodeNetworkMask)

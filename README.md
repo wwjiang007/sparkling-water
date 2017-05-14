@@ -4,6 +4,7 @@
 [![][travis img]][travis]
 [![][maven img]][maven]
 [![][license img]][license]
+[![Powered by H2O.ai](https://img.shields.io/badge/powered%20by-h2oai-yellow.svg)](https://github.com/h2oai/)
 
 [travis]:https://travis-ci.org/h2oai/sparkling-water
 [travis img]:https://travis-ci.org/h2oai/sparkling-water.svg?branch=master
@@ -28,13 +29,16 @@ The Sparkling Water is developed in multiple parallel branches.
 Each branch corresponds to a Spark major release (e.g., branch **rel-1.5** provides implementation of Sparkling Water for Spark **1.5**).
 
 Please, switch to the right branch:
+ - For Spark 2.1 use branch [rel-2.1](https://github.com/h2oai/sparkling-water/tree/rel-2.1)
  - For Spark 2.0 use branch [rel-2.0](https://github.com/h2oai/sparkling-water/tree/rel-2.0)
  - For Spark 1.6 use branch [rel-1.6](https://github.com/h2oai/sparkling-water/tree/rel-1.6)
- - For Spark 1.5 use branch [rel-1.5](https://github.com/h2oai/sparkling-water/tree/rel-1.5)
- - For Spark 1.4 use branch [rel-1.4](https://github.com/h2oai/sparkling-water/tree/rel-1.4)
- - For Spark 1.3 use branch [rel-1.3](https://github.com/h2oai/sparkling-water/tree/rel-1.3)
 
-> Note: The [master](https://github.com/h2oai/sparkling-water/tree/master) branch includes the latest changes
+> **Note** Older releases are available here:
+>  - For Spark 1.5 use branch [rel-1.5](https://github.com/h2oai/sparkling-water/tree/rel-1.5)
+>  - For Spark 1.4 use branch [rel-1.4](https://github.com/h2oai/sparkling-water/tree/rel-1.4)
+>  - For Spark 1.3 use branch [rel-1.3](https://github.com/h2oai/sparkling-water/tree/rel-1.3)
+
+> **Note** The [master](https://github.com/h2oai/sparkling-water/tree/master) branch includes the latest changes
 for the latest Spark version. They are back-ported into older Sparkling Water versions.
 
 <a name="Req"></a>
@@ -42,7 +46,7 @@ for the latest Spark version. They are back-ported into older Sparkling Water ve
 
   * Linux/OS X/Windows
   * Java 7+
-  * [Spark 1.3+](https://spark.apache.org/downloads.html)
+  * [Spark 1.6+](https://spark.apache.org/downloads.html)
     * `SPARK_HOME` shell variable must point to your local Spark installation
 
 ---
@@ -82,6 +86,7 @@ pip install future
 ### Download Binaries
 For each Sparkling Water you can download binaries here:
    * [Sparkling Water - Latest version](http://h2o-release.s3.amazonaws.com/sparkling-water/master/latest.html)
+   * [Sparkling Water - Latest 2.1 version](http://h2o-release.s3.amazonaws.com/sparkling-water/rel-2.1/latest.html)
    * [Sparkling Water - Latest 2.0 version](http://h2o-release.s3.amazonaws.com/sparkling-water/rel-2.0/latest.html)
    * [Sparkling Water - Latest 1.6 version](http://h2o-release.s3.amazonaws.com/sparkling-water/rel-1.6/latest.html)
    * [Sparkling Water - Latest 1.5 version](http://h2o-release.s3.amazonaws.com/sparkling-water/rel-1.5/latest.html)
@@ -116,82 +121,6 @@ There are several ways of using Sparkling Water:
 
 ---
 
-## Sparkling Water cluster backends
-
-Sparkling water supports two backend/deployment modes. We call them internal and external back-ends.
-Sparkling Water applications are independent on selected backend, the before `H2OContext` is created
-we need to tell it which backend used.
-
-### Internal backend
-In internal backend, H2O cloud is created automatically during the call of `H2OContext.getOrCreate`. Since it's not
-technically possible to get number of executors in Spark, we try to discover all executors at the initiation of `H2OContext`
-and we start H2O instance inside of each discovered executor. This solution is easiest to deploy; however when Spark
-or YARN kills the executor - which is not an unusual case - the whole H2O cluster goes down since h2o doesn't support high 
-availability. 
-
-
-Internal backend is default for behaviour for Sparkling Water. It can be changed via spark configuration property
-`spark.ext.h2o.backend.cluster.mode` to `external` or `internal`. Another way how to change type of backend is by calling
- `setExternalClusterMode()` or `setInternalClusterMode()` method on `H2OConf` class. `H2OConf` is simple wrapper 
-around `SparkConf` and inherits all properties in spark configuration.
-
-Here we show a few examples how H2OContext can be started with internal backend.
-
-Explicitly specify internal backend on `H2OConf`
-```
-val conf = new H2OConf(sc).setInternalClusterMode()
-val h2oContext = H2OContext.getOrCreate(sc, conf)
-```
-
-If `spark.ext.h2o.backend.cluster.mode` property was set to `internal` either on command line or on the `SparkConf` class
- we can call:
-```
-val h2oContext = H2OContext.getOrCreate(sc) 
-```
-
-or
-
-```
-val conf = new H2OConf(sc)
-val h2oContext = H2OContext.getOrCreate(sc, conf)
-```
-
-
- 
-### External backend
-In external cluster mode we expected that H2O cluster is already running and we connect to it from Spark driver (actually
-H2O node in special client mode running in spark driver). 
-
-Few examples how to Sparkling Water in external backend mode.
-
-This piece of code tries to connect to existing h2o cloud with name "h2o-cloud". The H2O cloud is located using multicast
-and is assumed that all h2o nodes were started without `-flatfile` option and with `-md5skip` option.
-For example like:
-```
-java -jar h2o.jar -name h2o-cloud -md5skip
-```
-
-The following code will not work since specifying flatfile on h2o nodes and not in the H2O configuration ends up with spark not being 
-able to connect to the rest of the cloud.
-```
-java -jar h2o.jar -name h2o-cloud -md5skip -flatfile path_to_flat_file
-```
-
-
-Since multicast communication is often limited in the network, this code connects to H2O cluster "h2o-cluster" using 
-direct communication with arbitrary h2o node. Method `setH2OCluster` automatically sets external backend mode. It is internally 
-using [H2O's flatfile configuration property](https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/howto/H2O-DevCmdLine.md#flatfile).
-
-This is also why all H2O nodes has to be started with `-flatfile` option and at least one node has to have ip and port of h2o
-client in it's flatfile. We can also specify the IP address of h2o client using method `setClientIP` and then use the provided
-ip address in the flatfile mentioned earlier.
-
-```
-val conf = new H2OConf(sc).setH2OCluster(host, port).setClientIp(ip).setCloudName("h2o-cloud")
-val h2oContext = H2OContext.getOrCreate(sc, conf)
-```
-
-
 <a name="SparkShell"></a>
 ### Run Sparkling shell
 
@@ -221,7 +150,7 @@ The Sparkling Shell supports creation of an H<sub>2</sub>O cloud and execution o
 4. Initialize H2OContext 
   ```scala
   import org.apache.spark.h2o._
-  val hc = H2OContext.getOrCreate(sc)
+  val hc = H2OContext.getOrCreate(sparkSession)
   ```
 
   > H2OContext start H2O services on top of Spark cluster and provides primitives for transformations between H2O and Spark datastructures.
@@ -299,6 +228,55 @@ See [docker/README.md](docker/README.md) to learn about Docker support.
 
 ---
 
+### Use Sparkling Water in Windows environments
+The Windows environments require several additional steps to make Spark and later Sparkling Water working.
+Great summary of configuration steps is [here](https://jaceklaskowski.gitbooks.io/mastering-apache-spark/content/spark-tips-and-tricks-running-spark-windows.html).
+
+On Windows it is required:
+  1. Download Spark distribution 
+  
+  2. Setup variable `SPARK_HOME`:
+  ```
+  SET SPARK_HOME=<location of your downloaded Spark distribution>
+  ```
+  
+  3. From https://github.com/steveloughran/winutils, download `winutils.exe` for Hadoop version which is referenced by your Spark distribution (for example, for `spark-2.1.0-bin-hadoop2.6.tgz` you need `wintutils.exe` for [hadoop2.6](https://github.com/steveloughran/winutils/blob/master/hadoop-2.6.4/bin/winutils.exe?raw=true)).
+  
+  4. Put `winutils.exe` into a new directory `%SPARK_HOME%\hadoop\bin` and set:
+  ```
+  SET HADOOP_HOME=%SPARK_HOME%\hadoop
+  ```
+  
+  5. Create a new file `%SPARK_HOME%\hadoop\conf\hive-site.xml` which setup default Hive scratch dir. The best location is a writable temporary directory, for example `%TEMP%\hive`:
+  ```
+  <configuration>
+    <property>
+      <name>hive.exec.scratchdir</name>
+      <value>PUT HERE LOCATION OF TEMP FOLDER</value>
+      <description>Scratch space for Hive jobs</description>
+    </property>
+  </configuration>
+  ```
+  > Note: you can also use Hive default scratch directory which is `/tmp/hive`. In this case, you need to create directory manually and call `winutils.exe chmod 777 \tmp\hive` to setup right permissions.
+  
+  6. Set `HADOOP_CONF_DIR` property
+  ```
+  SET HADOOP_CONF_DIR=%SPARK_HOME%\hadoop\conf
+  ```
+  
+  7. Run Sparkling Water as described above.
+
+---
+## Sparkling Water cluster backends
+
+Sparkling water supports two backend/deployment modes. We call them internal and external back-ends.
+Sparkling Water applications are independent on selected backend, the before `H2OContext` is created
+we need to tell it which backend used.
+
+For more details regarding the internal or external backend, please see [doc/backends.md](doc/backends.md). 
+
+---
+
 ## Develop with Sparkling Water
 
 ### Setup Sparkling Water in IntelliJ IDEA
@@ -352,6 +330,11 @@ Follow our [H2O Stream](https://groups.google.com/forum/#!forum/h2ostream).
  > **YARN mode**: The executors logs are available via `yarn logs -applicationId <appId>` command. Driver logs are by default printed to console, however, H2O also writes logs into `current_dir/h2ologs`.
  
  > The location of H2O driver logs can be controlled via Spark property `spark.ext.h2o.client.log.dir` (pass via `--conf`) option.
+
+* How to display Sparkling Water information in the Spark History Server?
+ > Sparkling Water reports the information already, you just need to add the sparkling-water classes on the classpath of the Spark history server.
+ > To see how to configure the spark application for logging into the History Server, please see [Spark Monitoring Configuration](http://spark.apache.org/docs/latest/monitoring.html) 
+ 
  
 * Spark is very slow during initialization or H2O does not form a cluster. What should I do?
   
@@ -398,4 +381,22 @@ Follow our [H2O Stream](https://groups.google.com/forum/#!forum/h2ostream).
     ```
     import _root_.hex.tree.gbm.GBM
     ```
+* Trying to run Sparkling Water on HDP Yarn cluster, but getting error:  
+  ```
+  java.lang.NoClassDefFoundError: com/sun/jersey/api/client/config/ClientConfig
+  ```
   
+  > The Yarn time service is not compatible with libraries provided by Spark. Please disable time service via setting `spark.hadoop.yarn.timeline-service.enabled=false`.
+  For more details, please visit https://issues.apache.org/jira/browse/SPARK-15343
+
+
+* Getting non-deterministic H2O Frames after the Spark Data Frame to H2O Frame conversion.
+
+  > This is caused by what we think is a bug in Apache Spark. On specific kinds of data combined with higher number of
+    partitions we can see non-determinism in BroadCastHashJoins. This leads to to jumbled rows and columns in the output H2O frame.
+    We recommend to disable broadcast based joins which seem to be non-deterministic as:
+    ```
+    sqlContext.sql(\"SET spark.sql.autoBroadcastJoinThreshold=-1\")
+    ```
+  > The issue can be tracked as [PUBDEV-3808](https://0xdata.atlassian.net/browse/PUBDEV-3808).
+    On the Spark side, the following issues are related to the problem: [Spark-17806](https://issues.apache.org/jira/browse/SPARK-17806)

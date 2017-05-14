@@ -22,7 +22,7 @@ DIST_BUILD_DIR="${DIST_DIR}build/"
 cat > "$TOPDIR/demofiles.list" <<EOF
 bin/
 $(find bin -type f)
-assembly/build/libs/sparkling-water-assembly-$VERSION-all.jar
+assembly/build/libs/sparkling-water-assembly_$SCALA_VERSION-$VERSION-all.jar
 examples/README.md
 examples/scripts/chicagoCrimeSmall.script.scala
 examples/scripts/chicagoCrimeSmallShell.script.scala
@@ -40,7 +40,7 @@ examples/smalldata/chicagoCrimes10k.csv
 examples/smalldata/craigslistJobTitles.csv
 $(find examples/flows/ -type f)
 $(find docker/ -type f | grep -v iml$)
-$(find py/build/dist/ -type f -name '*.egg')
+$(find py/build/dist/ -type f -name '*.zip')
 $(find py/examples/ -type f | grep -v h2ologs | grep -v metastore_db)
 $(find py/pysparkling -type f -name '*.py')
 LICENSE
@@ -66,6 +66,10 @@ ZIP_FILE="$DIST_BUILD_DIR/$ZIP_NAME"
 
 # Make distribution package and put it into dist directory
 rsync -rtvW --files-from "$TOPDIR/demofiles.list" "$TOPDIR/" "$DEST_DIR/"
+# Print available H2O Hadoop distributions to config file
+H2O_DRIVERS_LIST="standalone $(./gradlew -q :sparkling-water-assembly-h2o:printHadoopDistributions)"
+echo "$H2O_DRIVERS_LIST" > "$DEST_DIR/h2o_drivers.txt"
+
 ( 
  cd private
  zip -r "$ZIP_FILE" "$DEST_DIRNAME"
@@ -73,7 +77,8 @@ rsync -rtvW --files-from "$TOPDIR/demofiles.list" "$TOPDIR/" "$DEST_DIR/"
 # Copy scaladoc
 rsync -rtvW "$SCALADOC_SRC_DIR" "$SCALADOC_DST_DIR"
 
-GITHASH=`git rev-parse --verify HEAD`
+GITHASH=$(git rev-parse --verify HEAD)
+GITBRANCH=$(git rev-parse --verify --abbrev-ref HEAD)
 
 if [ "${H2O_NAME}" == "master" ]; then
   H2O_BRANCH_NAME="master"
@@ -84,14 +89,19 @@ fi
 H2O_PROJECT_VERSION=${H2O_VERSION}.${H2O_BUILD}
 H2O_BUILD_NUMBER=${H2O_BUILD}
 
+SPARK_MAJOR_VERSION=$(echo $SPARK_VERSION | cut -f 1,2 -d .)
 # Copy dist dir files
 cat "$DIST_DIR/index.html" \
   | sed -e "s/SUBST_PROJECT_VERSION/$VERSION/g"\
+  | sed -e "s/SUBST_PROJECT_PATCH_VERSION/$patch_version/g"\
   | sed -e "s/SUBST_PROJECT_GITHASH/${GITHASH}/g"\
+  | sed -e "s~SUBST_PROJECT_GITBRANCH~${GITBRANCH}~g"\
   | sed -e "s/SUBST_H2O_VERSION/${H2O_VERSION}/g"\
   | sed -e "s/SUBST_H2O_BUILD/${H2O_BUILD}/g"\
   | sed -e "s/SUBST_H2O_NAME/${H2O_NAME}/g"\
+  | sed -e "s/SUBST_H2O_DRIVERS_LIST/${H2O_DRIVERS_LIST}/g"\
   | sed -e "s/SUBST_SPARK_VERSION/${SPARK_VERSION}/g"\
+  | sed -e "s/SUBST_SPARK_MAJOR_VERSION/${SPARK_MAJOR_VERSION}/g"\
   | sed -e "s/SUBST_H2O_BRANCH_NAME/${H2O_BRANCH_NAME}/g"\
   > "$DIST_BUILD_DIR/index.html"
 
@@ -103,15 +113,18 @@ cat "$DIST_DIR/buildinfo.json" \
   \
   | sed -e "s/SUBST_PROJECT_VERSION/${VERSION}/g" \
   | sed -e "s/SUBST_LAST_COMMIT_HASH/${GITHASH}/g" \
+  | sed -e "s~SUBST_PROJECT_GITBRANCH~${GITBRANCH}~g" \
   \
   | sed -e "s/SUBST_H2O_NAME/${H2O_NAME}/g"\
   | sed -e "s/SUBST_H2O_VERSION/${H2O_VERSION}/g"\
+  | sed -e "s/SUBST_H2O_DRIVERS_LIST/${H2O_DRIVERS_LIST}/g"\
   \
   | sed -e "s/SUBST_H2O_PROJECT_VERSION/${H2O_PROJECT_VERSION}/g"\
   | sed -e "s/SUBST_H2O_BRANCH_NAME/${H2O_BRANCH_NAME}/g"\
   | sed -e "s/SUBST_H2O_BUILD_NUMBER/${H2O_BUILD_NUMBER}/g"\
   \
   | sed -e "s/SUBST_SPARK_VERSION/${SPARK_VERSION}/g"\
+  | sed -e "s/SUBST_SPARK_MAJOR_VERSION/${SPARK_MAJOR_VERSION}/g"\
   \
   > "$DIST_BUILD_DIR/buildinfo.json"
 

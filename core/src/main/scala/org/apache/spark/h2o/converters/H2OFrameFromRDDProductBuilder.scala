@@ -18,6 +18,7 @@
 package org.apache.spark.h2o.converters
 
 import org.apache.spark.TaskContext
+import org.apache.spark.h2o.backends.external.ExternalWriteConverterCtx
 import org.apache.spark.h2o.converters.WriteConverterCtxUtils.UploadPlan
 import org.apache.spark.h2o.utils.NodeDesc
 import org.apache.spark.h2o.utils.SupportedTypes.SupportedType
@@ -71,7 +72,7 @@ case class H2OFrameFromRDDProductBuilder(hc: H2OContext, rdd: RDD[Product], fram
     val expectedTypes = if(hc.getConf.runsInInternalClusterMode){
       meta.vecTypes
     }else{
-      val javaClasses = meta.types.map(_.javaClass)
+      val javaClasses = meta.types.map(ExternalWriteConverterCtx.internalJavaClassOf(_))
       ExternalFrameUtils.prepareExpectedTypes(javaClasses)
     }
 
@@ -110,11 +111,11 @@ object H2OFrameFromRDDProductBuilder{
     * @return pair (partition ID, number of rows in this partition)
     */
   private[converters] def perTypedDataPartition[T<:Product]()
-                                                           (keyName: String, vecTypes: Array[Byte], uploadPlan: Option[UploadPlan])
+                                                           (keyName: String, vecTypes: Array[Byte], uploadPlan: Option[UploadPlan], writeTimeout: Int)
                                                            (context: TaskContext, it: Iterator[T]): (Int, Long) = {
     val (iterator, dataSize) = WriteConverterCtxUtils.bufferedIteratorWithSize(uploadPlan, it)
     // An array of H2O NewChunks; A place to record all the data in this partition
-    val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize)
+    val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize, writeTimeout)
 
     con.createChunks(keyName, vecTypes, context.partitionId())
     iterator.foreach(prod => { // For all rows which are subtype of Product

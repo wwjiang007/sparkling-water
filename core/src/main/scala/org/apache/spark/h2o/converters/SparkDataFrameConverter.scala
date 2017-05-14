@@ -19,16 +19,15 @@ package org.apache.spark.h2o.converters
 
 import org.apache.spark._
 import org.apache.spark.h2o.H2OContext
+import org.apache.spark.h2o.backends.external.ExternalWriteConverterCtx
 import org.apache.spark.h2o.converters.WriteConverterCtxUtils.UploadPlan
-import org.apache.spark.h2o.utils.ReflectionUtils._
-import org.apache.spark.h2o.utils.{H2OSchemaUtils, NodeDesc}
+import org.apache.spark.h2o.utils.{H2OSchemaUtils, ReflectionUtils}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, H2OFrameRelation, Row, SQLContext}
-import water.{ExternalFrameUtils, Key}
 import water.fvec.{Frame, H2OFrame}
+import water.{ExternalFrameUtils, Key}
 
-import scala.collection.immutable
 
 private[h2o] object SparkDataFrameConverter extends Logging {
 
@@ -65,10 +64,12 @@ private[h2o] object SparkDataFrameConverter extends Logging {
     // otherwise for external backend store expected types
     val expectedTypes = if(hc.getConf.runsInInternalClusterMode){
       // Transform datatype into h2o types
-      flatRddSchema.map(f => vecTypeFor(f._2.dataType)).toArray
+      flatRddSchema.map(f => ReflectionUtils.vecTypeFor(f._2.dataType)).toArray
     }else{
-      val javaClasses = flatRddSchema.map(f => supportedTypeOf(f._2.dataType).javaClass).toArray
-      ExternalFrameUtils.prepareExpectedTypes(javaClasses)
+      val internalJavaClasses = flatRddSchema.map{f =>
+        ExternalWriteConverterCtx.internalJavaClassOf(f._2.dataType)
+      }.toArray
+      ExternalFrameUtils.prepareExpectedTypes(internalJavaClasses)
     }
     WriteConverterCtxUtils.convert[Row](hc, dfRdd, keyName, fnames, expectedTypes, perSQLPartition(flatRddSchema))
   }
@@ -85,11 +86,11 @@ private[h2o] object SparkDataFrameConverter extends Logging {
     */
   private[this]
   def perSQLPartition(types: Seq[(Seq[Int], StructField, Byte)])
-                     (keyName: String, vecTypes: Array[Byte], uploadPlan: Option[UploadPlan])
+                     (keyName: String, vecTypes: Array[Byte], uploadPlan: Option[UploadPlan], writeTimeout: Int)
                      (context: TaskContext, it: Iterator[Row]): (Int, Long) = {
 
     val (iterator, dataSize) = WriteConverterCtxUtils.bufferedIteratorWithSize(uploadPlan, it)
-    val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize)
+    val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize, writeTimeout)
     // Creates array of H2O NewChunks; A place to record all the data in this partition
     con.createChunks(keyName, vecTypes, context.partitionId())
 
@@ -134,6 +135,15 @@ private[h2o] object SparkDataFrameConverter extends Logging {
             case IntegerType => con.put(idx, if (isAry) ary(aryIdx).asInstanceOf[Int] else subRow.getInt(aidx))
             case LongType => con.put(idx, if (isAry) ary(aryIdx).asInstanceOf[Long] else subRow.getLong(aidx))
             case FloatType => con.put(idx, if (isAry) ary(aryIdx).asInstanceOf[Float] else subRow.getFloat(aidx))
+            case _: DecimalType => con.put(idx, if (isAry) {
+              ary(aryIdx).asInstanceOf[BigDecimal].doubleValue()
+            } else {
+              if (isVec) {
+                getVecVal(subRow, aidx, idx - startOfSeq)
+              } else {
+                subRow.getDecimal(aidx).doubleValue()
+              }
+            })
             case DoubleType => con.put(idx, if (isAry) {
               ary(aryIdx).asInstanceOf[Double]
             } else {
@@ -149,6 +159,7 @@ private[h2o] object SparkDataFrameConverter extends Logging {
               con.put(idx, sv)
 
             case TimestampType => con.put(idx, subRow.getAs[java.sql.Timestamp](aidx))
+            case DateType      => con.put(idx, subRow.getAs[java.sql.Date](aidx))
             case _ => con.putNA(idx)
           }
         }

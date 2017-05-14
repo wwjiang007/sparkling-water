@@ -1,6 +1,6 @@
 # Sparkling Water Development Documentation
 
-##Table of Contents
+## Table of Contents
 - [Typical Use Case](#UseCase)
 - [Requirements](#Req)
 - [Design](#Design)
@@ -22,6 +22,7 @@
 - [Running Sparkling Water](#RunSW)
   - [Starting H2O Services](#StartH2O)
   - [Memory Allocation](#MemorySetup)
+  - [Security](#Security)
   - [Converting H2OFrame into RDD](#ConvertDF)
     - [Example](#Example)
   - [Converting H2OFrame into DataFrame](#ConvertSchema)
@@ -215,7 +216,8 @@ The environment must contain the property `SPARK_HOME` that points to the Spark 
 
 The following configuration properties can be passed to Spark to configure Sparking Water
 
-####Configuration properties independent on selected backend
+#### Configuration properties independent on selected backend
+
 | Property name | Default value | Description |
 |---------------|---------------|-------------|
 | **Generic parameters** |||
@@ -227,7 +229,7 @@ The following configuration properties can be passed to Spark to configure Spark
 |`spark.ext.scala.int.default.num`|`1`|Number of executors started at the start of h2o services.|
 |`spark.ext.h2o.topology.change.listener.enabled`|`true`|Decides whether listener which kills h2o cloud on the change of underlying cluster's topology is enabled or not.|
 |`spark.ext.h2o.spark.version.check.enabled`|`true`|Enables check if runtime Spark version matches build time Spark version.|
-|`spark.ext.h2o.exit.on.unsupported.spark.param`|`true`|If unsupported Spark parameters is detected, then application is forced to shutdown.|
+|`spark.ext.h2o.fail.on.unsupported.spark.param`|`true`|If unsupported Spark parameters is detected, then application is forced to shutdown.|
 |`spark.ext.h2o.jks`|`null`|Path to Java KeyStore file.|
 |`spark.ext.h2o.jks.pass`|`null`|Password for Java KeyStore file.|
 |`spark.ext.h2o.hash.login`|`false`|Enable hash login.|
@@ -235,7 +237,8 @@ The following configuration properties can be passed to Spark to configure Spark
 |`spark.ext.h2o.kerberos.login`|`false`|Enable Kerberos login.|
 |`spark.ext.h2o.login.conf`|`null`|Login configuration file.|
 |`spark.ext.h2o.user.name`|`null`|Override user name for cluster.|
-| **H2O client parameters** ||| 
+|`spark.ext.h2o.internal_security_conf`|`null`|Path to a file containing H2O/SW internal security configuration.|
+| **H2O client parameters** |||
 |`spark.ext.h2o.client.ip`|`null`|IP of H2O client node |
 |`spark.ext.h2o.client.iced.dir`|`null`|Location of iced directory for the driver instance.|
 |`spark.ext.h2o.client.log.level`| `INFO`| H2O internal log level used for H2O client running inside Spark driver.|
@@ -247,7 +250,7 @@ The following configuration properties can be passed to Spark to configure Spark
 ---
 
 
-####Internal backend configuration properties
+#### Internal backend configuration properties
 | Property name | Default value | Description |
 |---------------|---------------|-------------|
 | **Generic parameters** |||
@@ -266,7 +269,7 @@ The following configuration properties can be passed to Spark to configure Spark
 |`spark.ext.h2o.node.log.dir`| ` System.getProperty("user.dir") + File.separator + "h2ologs"` or YARN container dir| Location of h2o logs on executor machine.|
 ---
 
-####External backend configuration properties
+#### External backend configuration properties
 | Property name | Default value | Description |
 |---------------|---------------|-------------|
 |`spark.ext.h2o.cloud.representative`| `null`| ip:port of arbitrary h2o node to identify external h2o cluster|
@@ -304,6 +307,47 @@ H2O resides in the same executor JVM as Spark. The memory provided for H2O is co
 
 * For JVMs that require a large amount of memory, we strongly recommend configuring the maximum amount of memory available for individual mappers. For information on how to do this using Yarn, refer to http://docs.h2o.ai/deployment/hadoop_yarn.html
 
+---
+<a name="Security"></a>
+### Security
+
+Both Spark and H2O support basic node authentication and data encryption. In H2O's case we encrypt all the data sent between server nodes and between client
+and server nodes. This feature does not support H2O's UDP feature, only data sent via TCP is encrypted.
+
+Currently only encryption based on Java's key pair is supported (more in-depth explanation can be found in H2O's documentation linked below).
+
+To enable security for Spark methods please check [their documentation](http://spark.apache.org/docs/latest/security.html).
+
+Security for data exchanged between H2O instances can be enabled manually by generating all necessary files and distributing them to all worker nodes as
+described in [H2O's documentation](https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/security.rst#ssl-internode-security) and passing the "spark.ext.h2o
+.internal_security_conf" to spark submit:
+
+```scala
+bin/sparkling-shell /
+--conf "spark.ext.h2o.internal_security_conf=ssl.properties"
+```
+
+We also provide utility methods which will automatically generate all necessary files and enable security on all H2O nodes:
+
+```
+import org.apache.spark.network.Security
+import org.apache.spark.h2o._
+Security.enableSSL(sc) // generate properties file, key pairs and set appropriate H2O parameters
+val hc = H2OContext.getOrCreate(sc) // start the H2O cloud
+```
+
+Or if you plan on passing your own H2OConf then please use:
+
+```
+import org.apache.spark.network.Security
+import org.apache.spark.h2o._
+val conf: H2OConf = // generate H2OConf file
+Security.enableSSL(sc, conf) // generate properties file, key pairs and set appropriate H2O parameters
+val hc = H2OContext.getOrCreate(sc, conf) // start the H2O cloud
+```
+
+This method will generate all files and distribute them via YARN or Spark methods to all worker nodes. This communication will be secure if you configured
+YARN/Spark security.
 
 ---
 <a name="ConvertDF"></a>
