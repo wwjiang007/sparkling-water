@@ -19,18 +19,17 @@ package org.apache.spark.h2o.converters
 
 import org.apache.spark.TaskContext
 import org.apache.spark.h2o._
-import org.apache.spark.h2o.backends.external.ExternalWriteConverterCtx
+import org.apache.spark.h2o.backends.external.{ExternalBackendUtils, ExternalWriteConverterCtx}
 import org.apache.spark.h2o.converters.WriteConverterCtxUtils.UploadPlan
-import org.apache.spark.h2o.utils.{NodeDesc, ReflectionUtils}
+import org.apache.spark.h2o.utils.ReflectionUtils
 import org.apache.spark.internal.Logging
+import water.Key
 import water.fvec.H2OFrame
-import water.{ExternalFrameUtils, Key}
 
-import scala.collection.immutable
 import scala.language.implicitConversions
 import scala.reflect.runtime.universe._
 
-private[converters] object PrimitiveRDDConverter extends Logging{
+private[converters] object PrimitiveRDDConverter extends Logging {
 
   def toH2OFrame[T: TypeTag](hc: H2OContext, rdd: RDD[T], frameKeyName: Option[String]): H2OFrame = {
     import ReflectionUtils._
@@ -41,25 +40,25 @@ private[converters] object PrimitiveRDDConverter extends Logging{
 
     // in case of internal backend, store regular vector types
     // otherwise for external backend store expected types
-    val expectedTypes = if(hc.getConf.runsInInternalClusterMode){
+    val expectedTypes = if (hc.getConf.runsInInternalClusterMode) {
       Array[Byte](vecTypeOf[T])
-    }else{
+    } else {
       val clazz = ExternalWriteConverterCtx.internalJavaClassOf[T]
-      ExternalFrameUtils.prepareExpectedTypes(Array[Class[_]](clazz))
+      ExternalBackendUtils.prepareExpectedTypes(Array[Class[_]](clazz))
     }
 
-    WriteConverterCtxUtils.convert[T](hc, rdd, keyName, fnames, expectedTypes, perPrimitiveRDDPartition())
+    WriteConverterCtxUtils.convert[T](hc, rdd, keyName, fnames, expectedTypes, Array.empty[Int], perPrimitiveRDDPartition())
   }
 
 
   /**
     *
-    * @param keyName key of the frame
-    * @param vecTypes h2o vec types
+    * @param keyName    key of the frame
+    * @param vecTypes   h2o vec types
     * @param uploadPlan if external backend is used, then it is a plan which assigns each partition h2o
     *                   node where the data from that partition will be uploaded, otherwise is Node
-    * @param context spark task context
-    * @param it iterator over data in the partition
+    * @param context    spark task context
+    * @param it         iterator over data in the partition
     * @tparam T type of data inside the RDD
     * @return pair (partition ID, number of rows in this partition)
     */
@@ -70,8 +69,11 @@ private[converters] object PrimitiveRDDConverter extends Logging{
 
     val (iterator, dataSize) = WriteConverterCtxUtils.bufferedIteratorWithSize(uploadPlan, it)
     val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize, writeTimeout)
-    con.createChunks(keyName, vecTypes, context.partitionId())
-    iterator.foreach {con.putAnySupportedType(0, _)}
+
+    con.createChunks(keyName, vecTypes, context.partitionId(), Array.empty[Int])
+    iterator.foreach {
+      con.putAnySupportedType(0, _)
+    }
     //Compress & write data in partitions to H2O Chunks
     con.closeChunks()
     // Return Partition number and number of rows in this partition

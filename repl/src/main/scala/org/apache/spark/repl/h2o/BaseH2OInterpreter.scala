@@ -23,9 +23,10 @@
 package org.apache.spark.repl.h2o
 
 
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.util.Utils
 
 import scala.Predef.{println => _}
 import scala.annotation.tailrec
@@ -300,4 +301,5 @@ object BaseH2OInterpreter {
     }
     finally Thread.currentThread().setContextClassLoader(classloader)
   }
+
 }

@@ -35,11 +35,11 @@ private[converters] object LabeledPointConverter extends Logging {
     val keyName = frameKeyName.getOrElse("frame_rdd_" + rdd.id + Key.rand())
 
     // first convert vector to dense vector
-    val rddDense = rdd.map(labeledPoint => new LabeledPoint(labeledPoint.label,labeledPoint.features.toDense))
+    val rddDense = rdd.map(labeledPoint => new LabeledPoint(labeledPoint.label, labeledPoint.features.toDense))
     val numFeatures = rddDense.map(labeledPoint => labeledPoint.features.size)
     val maxNumFeatures = numFeatures.max()
     val minNumFeatures = numFeatures.min()
-    if(minNumFeatures<maxNumFeatures){
+    if (minNumFeatures < maxNumFeatures) {
       // Features vectors of different sizes, filling missing with n/a
       logWarning("WARNING: Converting RDD[LabeledPoint] to H2OFrame where features vectors have different size, filling missing with n/a")
     }
@@ -47,20 +47,20 @@ private[converters] object LabeledPointConverter extends Logging {
 
     // in case of internal backend, store regular vector types
     // otherwise for external backend store expected types
-    val typeToUse = if(hc.getConf.runsInInternalClusterMode) Vec.T_NUM else ExternalFrameUtils.EXPECTED_DOUBLE
+    val typeToUse = if (hc.getConf.runsInInternalClusterMode) Vec.T_NUM else ExternalFrameUtils.EXPECTED_DOUBLE
     val expectedTypes = Array.fill(maxNumFeatures + 1)(typeToUse)
 
-    WriteConverterCtxUtils.convert[LabeledPoint](hc, rdd, keyName, fnames, expectedTypes, perLabeledPointRDDPartition(maxNumFeatures))
+    WriteConverterCtxUtils.convert[LabeledPoint](hc, rdd, keyName, fnames, expectedTypes, Array.empty[Int], perLabeledPointRDDPartition(maxNumFeatures))
   }
 
   /**
     *
-    * @param keyName key of the frame
-    * @param vecTypes h2o vec types
+    * @param keyName        key of the frame
+    * @param vecTypes       h2o vec types
     * @param maxNumFeatures maximum number of features in the labeled point
-    * @param uploadPlan plan which assigns each partition h2o node where the data from that partition will be uploaded
-    * @param context spark task context
-    * @param it iterator over data in the partition
+    * @param uploadPlan     plan which assigns each partition h2o node where the data from that partition will be uploaded
+    * @param context        spark task context
+    * @param it             iterator over data in the partition
     * @return pair (partition ID, number of rows in this partition)
     */
   private[this]
@@ -70,7 +70,7 @@ private[converters] object LabeledPointConverter extends Logging {
     val (iterator, dataSize) = WriteConverterCtxUtils.bufferedIteratorWithSize(uploadPlan, it)
     val con = WriteConverterCtxUtils.create(uploadPlan, context.partitionId(), dataSize, writeTimeout)
     // Creates array of H2O NewChunks; A place to record all the data in this partition
-    con.createChunks(keyName, vecTypes, context.partitionId())
+    con.createChunks(keyName, vecTypes, context.partitionId(), Array.empty[Int])
 
     iterator.foreach(labeledPoint => {
       // For all LabeledPoints in RDD
@@ -80,13 +80,13 @@ private[converters] object LabeledPointConverter extends Logging {
       con.put(nextChunkId, labeledPoint.label)
       nextChunkId = nextChunkId + 1
 
-      for( i<-0 until labeledPoint.features.size) {
+      for (i <- 0 until labeledPoint.features.size) {
         // For all features...
         con.put(nextChunkId, labeledPoint.features(i))
         nextChunkId = nextChunkId + 1
       }
 
-      for( i<-labeledPoint.features.size until maxNumFeatures){
+      for (i <- labeledPoint.features.size until maxNumFeatures) {
         // Fill missing features with n/a
         con.putNA(nextChunkId)
         nextChunkId = nextChunkId + 1

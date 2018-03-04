@@ -20,15 +20,15 @@ import org.apache.spark.SparkContext
 import org.apache.spark.h2o.H2OContext
 import org.apache.spark.repl.h2o.H2OInterpreter
 import water.Iced
-import water.api.Handler
+import water.api.{Handler, HandlerFactory, RestApiContext}
 import water.exceptions.H2ONotFoundArgumentException
 
 import scala.collection.concurrent.TrieMap
 
 /**
- * Handler for all Scala related endpoints
- */
-class ScalaCodeHandler(val sc: SparkContext, val h2oContext: H2OContext) extends Handler{
+  * Handler for all Scala related endpoints
+  */
+class ScalaCodeHandler(val sc: SparkContext, val h2oContext: H2OContext) extends Handler {
 
   val intrPoolSize = h2oContext.getConf.scalaIntDefaultNum
   val freeInterpreters = new java.util.concurrent.ConcurrentLinkedQueue[H2OInterpreter]
@@ -56,27 +56,27 @@ class ScalaCodeHandler(val sc: SparkContext, val h2oContext: H2OContext) extends
 
   def fetchInterpreter(): H2OInterpreter = {
     this.synchronized {
-                        if (!freeInterpreters.isEmpty) {
-                          val intp = freeInterpreters.poll()
-                          mapIntr.put(intp.sessionId, intp)
-                          new Thread(new Runnable {
-                            def run(): Unit = {
-                              createInterpreterInPool()
-                            }
-                          }).start()
-                          intp
-                        } else {
-                          // pool is empty at the moment and is being filled, return new interpreter without using the pool
-                          val id = createID()
-                          val intp = new H2OInterpreter(sc, id)
-                          mapIntr.put(intp.sessionId, intp)
-                          intp
-                        }
-                      }
+      if (!freeInterpreters.isEmpty) {
+        val intp = freeInterpreters.poll()
+        mapIntr.put(intp.sessionId, intp)
+        new Thread(new Runnable {
+          def run(): Unit = {
+            createInterpreterInPool()
+          }
+        }).start()
+        intp
+      } else {
+        // pool is empty at the moment and is being filled, return new interpreter without using the pool
+        val id = createID()
+        val intp = new H2OInterpreter(sc, id)
+        mapIntr.put(intp.sessionId, intp)
+        intp
+      }
+    }
   }
 
   def destroySession(version: Int, s: ScalaSessionIdV3): ScalaSessionIdV3 = {
-    if(!mapIntr.contains(s.session_id)){
+    if (!mapIntr.contains(s.session_id)) {
       throw new H2ONotFoundArgumentException("Session does not exists. Create session using the address /3/scalaint!")
     }
     mapIntr(s.session_id).closeInterpreter()
@@ -104,15 +104,16 @@ class ScalaCodeHandler(val sc: SparkContext, val h2oContext: H2OContext) extends
 
   def createID(): Int = {
     this.synchronized {
-                        lastIdUsed = lastIdUsed + 1
-                        lastIdUsed
-                      }
+      lastIdUsed = lastIdUsed + 1
+      lastIdUsed
+    }
   }
 }
 
 private[api] class IcedCode(val session_id: Int, val code: String) extends Iced[IcedCode] {
 
   def this() = this(-1, null)
+
   // initialize with dummy values, this is used by the createImpl method in the
   //RequestServer, as it calls constructor without any arguments
 }
@@ -125,3 +126,29 @@ private[api] class IcedSessionId(val rdd_id: Integer) extends Iced[IcedSessionId
   //RequestServer, as it calls constructor without any arguments
 }
 
+object ScalaCodeHandler {
+
+  private[api] def registerEndpoints(context: RestApiContext, sc: SparkContext, h2oContext: H2OContext) = {
+    val scalaCodeHandler = new ScalaCodeHandler(sc, h2oContext)
+
+    def scalaCodeFactory = new HandlerFactory {
+      override def create(aClass: Class[_ <: Handler]): Handler = scalaCodeHandler
+    }
+
+    context.registerEndpoint("interpretScalaCode", "POST", "/3/scalaint/{session_id}",
+      classOf[ScalaCodeHandler], "interpret", "Interpret the code and return the result",
+      scalaCodeFactory)
+
+    context.registerEndpoint("initScalaSession", "POST", "/3/scalaint",
+      classOf[ScalaCodeHandler], "initSession", "Return session id for communication with scala interpreter",
+      scalaCodeFactory)
+
+    context.registerEndpoint("getScalaSessions", "GET", "/3/scalaint",
+      classOf[ScalaCodeHandler], "getSessions", "Return all active session IDs", scalaCodeFactory)
+
+    context.registerEndpoint("destroyScalaSession", "DELETE", "/3/scalaint/{session_id}",
+      classOf[ScalaCodeHandler], "destroySession", "Return session id for communication with scala interpreter",
+      scalaCodeFactory)
+  }
+
+}

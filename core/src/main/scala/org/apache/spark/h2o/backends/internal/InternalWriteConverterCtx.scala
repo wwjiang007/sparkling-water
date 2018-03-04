@@ -20,16 +20,38 @@ package org.apache.spark.h2o.backends.internal
 import java.sql.{Date, Timestamp}
 
 import org.apache.spark.h2o.converters.WriteConverterCtx
+import org.apache.spark.mllib
+import org.apache.spark.mllib.linalg.{DenseVector, SparseVector}
 import water.fvec.{FrameUtils, NewChunk}
 
 class InternalWriteConverterCtx extends WriteConverterCtx {
 
   private var chunks: Array[NewChunk] = _
-  override def createChunks(keyName: String, vecTypes: Array[Byte], chunkId: Int): Unit = {
-   chunks = FrameUtils.createNewChunks(keyName, vecTypes, chunkId)
+
+  private var sparseVectorPts: collection.mutable.Map[Int, Array[Int]] = _
+  private var sparseVectorInUse: collection.mutable.Map[Int, Boolean] = _
+
+  private var rowIdx: Int = _
+
+  override def createChunks(keyName: String, h2oTypes: Array[Byte], chunkId: Int, maxVecSizes: Array[Int], vecStartSize: Map[Int, Int]): Unit = {
+    chunks = FrameUtils.createNewChunks(keyName, h2oTypes, chunkId)
+    sparseVectorPts = collection.mutable.Map(vecStartSize.mapValues(size => new Array[Int](size)).toSeq: _*)
+    sparseVectorInUse = collection.mutable.Map(vecStartSize.mapValues(size => false).toSeq: _*)
   }
 
-  override def closeChunks(): Unit = {
+  override def closeChunks(numRows: Int): Unit = {
+    sparseVectorPts.foreach { case (startIdx, pts) =>
+      if (sparseVectorInUse(startIdx)) {
+        var i = 0
+        while (i < pts.length) {
+          val lastRowIdx = pts(i)
+          if (lastRowIdx < numRows) {
+            chunks(startIdx + i).addZeros(numRows - lastRowIdx)
+          }
+          i += 1
+        }
+      }
+    }
     FrameUtils.closeNewChunks(chunks)
   }
 
@@ -47,4 +69,36 @@ class InternalWriteConverterCtx extends WriteConverterCtx {
   override def putNA(columnNum: Int): Unit = chunks(columnNum).addNA()
 
   override def numOfRows(): Int = chunks(0).len()
+
+  override def putSparseVector(startIdx: Int, vector: SparseVector, maxVecSize: Int): Unit = {
+    sparseVectorInUse(startIdx) = true
+    val sparseVectorPt = sparseVectorPts(startIdx)
+    var i = 0
+    while (i < vector.indices.length) {
+      val idx = vector.indices(i)
+      val value = vector.values(i)
+      val zeros = rowIdx - sparseVectorPt(idx)
+      if (zeros > 0) {
+        chunks(startIdx + idx).addZeros(zeros)
+      }
+      put(startIdx + idx, value)
+      sparseVectorPt(idx) = rowIdx + 1
+      i += 1
+    }
+  }
+
+  override def startRow(rowIdx: Int): Unit = {
+    this.rowIdx = rowIdx
+  }
+  override def finishRow(): Unit = {}
+
+  override def putDenseVector(startIdx: Int, vector: DenseVector, maxVecSize: Int): Unit = {
+    putAnyVector(startIdx, vector, maxVecSize)
+  }
+
+  private def putAnyVector(startIdx: Int, vector: mllib.linalg.Vector, maxVecSize: Int): Unit ={
+    (0 until vector.size).foreach{ idx => put(startIdx + idx, vector(idx))}
+
+    (vector.size until maxVecSize).foreach( idx => put(startIdx + idx, 0.0))
+  }
 }

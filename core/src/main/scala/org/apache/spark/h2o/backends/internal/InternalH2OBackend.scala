@@ -18,16 +18,13 @@
 package org.apache.spark.h2o.backends.internal
 
 import org.apache.spark.SparkEnv
-import org.apache.spark.internal.Logging
-
 import org.apache.spark.h2o.backends.SparklingBackend
 import org.apache.spark.h2o.utils.NodeDesc
 import org.apache.spark.h2o.{H2OConf, H2OContext}
+import org.apache.spark.internal.Logging
 import org.apache.spark.listeners.ExecutorAddNotSupportedListener
 import water.api.RestAPIManager
 import water.{H2O, H2OStarter}
-
-import scala.util.Random
 
 
 class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend with InternalBackendUtils with Logging {
@@ -57,7 +54,7 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
 
     // Setup properties for H2O configuration
     if (conf.cloudName.isEmpty) {
-      conf.setCloudName("sparkling-water-" + System.getProperty("user.name", "cluster") + "_" + Math.abs(Random.nextInt()))
+      conf.setCloudName("sparkling-water-" + System.getProperty("user.name", "cluster") + "_" + conf.sparkConf.getAppId)
     }
 
     checkUnsupportedSparkOptions(InternalH2OBackend.UNSUPPORTED_SPARK_OPTIONS, conf)
@@ -71,12 +68,6 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
     // Create dummy RDD distributed over executors
     val (spreadRDD, spreadRDDNodes) = new SpreadRDDBuilder(hc, InternalBackendUtils.guessTotalExecutorSize(hc.sparkContext)).build()
 
-    if(hc.getConf.isClusterTopologyListenerEnabled){
-      // Attach listener which kills H2O cluster when new Spark executor has been launched ( which means
-      // that this executors hasn't been discovered during the spreadRDD phase)
-      hc.sparkContext.addSparkListener(new ExecutorAddNotSupportedListener())
-    }
-
     // Start H2O nodes
     // Get executors to execute H2O
     val allExecutorIds = spreadRDDNodes.map(_.nodeId).distinct
@@ -86,7 +77,8 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
       s"Unexpected number of executors ${spreadRDDNodes.length}!=${executorIds.length}")
     // H2O is executed only on the subset of Spark cluster - fail
     if (executorIds.length < allExecutorIds.length) {
-      throw new IllegalArgumentException(s"""Spark cluster contains ${allExecutorIds.length},
+      throw new IllegalArgumentException(
+        s"""Spark cluster contains ${allExecutorIds.length},
                but H2O is running only on ${executorIds.length} nodes!""")
     }
     // Execute H2O on given nodes
@@ -94,15 +86,25 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
 
     var h2oNodeArgs = InternalBackendUtils.getH2ONodeArgs(hc.getConf)
     // Disable web on h2o nodes in non-local mode
-    if(!hc.sparkContext.isLocal){
-      h2oNodeArgs = h2oNodeArgs ++ Array("-disable_web")
-    }else{
+    if (!hc.sparkContext.isLocal) {
+      if (!hc.getConf.h2oNodeWebEnabled) {
+        h2oNodeArgs = h2oNodeArgs ++ Array("-disable_web")
+      }
+    } else {
       // In local mode we don't start h2o client and use standalone h2o mode right away. We need to set login configuration
       // in this case explicitly
       h2oNodeArgs = h2oNodeArgs ++ getLoginArgs(hc.getConf)
     }
     logDebug(s"Arguments used for launching h2o nodes: ${h2oNodeArgs.mkString(" ")}")
     val executors = InternalBackendUtils.startH2O(hc.sparkContext, spreadRDD, spreadRDDNodes.length, h2oNodeArgs, hc.getConf.nodeNetworkMask)
+
+    // H2O is already started on the nodes, make sure that we kill the cloud when a new executor joins
+    if (!(hc.sparkContext.isLocal || hc.sparkContext.master.startsWith("local-cluster[")) && hc.getConf.isClusterTopologyListenerEnabled) {
+      // Attach listener which kills H2O cluster when new Spark executor has been launched ( which means
+      // that this executors hasn't been discovered during the spreadRDD phase)
+      hc.sparkContext.addSparkListener(new ExecutorAddNotSupportedListener())
+    }
+
 
     // Connect to a cluster via H2O client, but only in non-local case
     if (!hc.sparkContext.isLocal) {
@@ -115,17 +117,17 @@ class InternalH2OBackend(@transient val hc: H2OContext) extends SparklingBackend
     }
     // And wait for right cluster size
     H2O.waitForCloudSize(executors.length, hc.getConf.cloudTimeout)
-
     // Register web API for client
     RestAPIManager(hc).registerAll()
-    H2O.finalizeRegistration()
+    H2O.startServingRestApi()
     executors
   }
 
+  override def epilog = ""
 }
 
-object InternalH2OBackend{
-  val UNSUPPORTED_SPARK_OPTIONS =  Seq(
+object InternalH2OBackend {
+  val UNSUPPORTED_SPARK_OPTIONS = Seq(
     ("spark.dynamicAllocation.enabled", "true"),
     ("spark.speculation", "true"))
 }

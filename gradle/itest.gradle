@@ -3,14 +3,6 @@
 //
 
 
-// FIXME: this is not necessary anymore with new version of Idea
-idea {
-    module {
-        jdkName='inheried'
-        testSourceDirs += file('src/integTest/scala')
-    }
-}
-
 sourceSets {
     integTest {
         scala.srcDir file('src/integTest/scala')
@@ -30,7 +22,7 @@ configurations {
 task integTest(type: Test) {
     group = 'Verification'
     description = 'Runs all integration tests'
-    testClassesDir = sourceSets.integTest.output.classesDir
+    testClassesDirs = sourceSets.integTest.output.classesDirs
     classpath = sourceSets.integTest.runtimeClasspath
 
     //
@@ -45,8 +37,6 @@ task integTest(type: Test) {
     workingDir = rootDir
     // Increase test runner memory
     maxHeapSize = "4g"
-    // Increase PermGen for forked JVM
-    jvmArgs '-XX:MaxPermSize=384m'
 
     def testEnv = detectEnvironment()
     // Decide which tests should be launch here based on environment

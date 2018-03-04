@@ -1,6 +1,6 @@
-apply from: "$rootDir/gradle/sparkTest.gradle"
-
 description = "Sparkling Water ML Pipelines"
+
+apply from: "$rootDir/gradle/sparkTest.gradle"
 
 dependencies {
   // Sparkling Water Core
@@ -16,27 +16,5 @@ dependencies {
   // And use scalatest for Scala testing
   testCompile "org.scalatest:scalatest_${scalaBaseVersion}:2.2.1"
   testCompile "junit:junit:4.11"
-  testCompile project(':sparkling-water-core').sourceSets.test.output
-
+  testCompile project(path: ':sparkling-water-core', configuration: 'testArchives')
 }
-
-// add additional source set for desired scala version
-sourceSets {
-  main {
-    scala {
-      srcDirs += ["src/main/scala_$scalaBaseVersion", "src/main/java"]
-    }
-    java {
-      srcDirs = []
-    }
-  }
-  test {
-    scala {
-      srcDirs += ["src/test/scala_$scalaBaseVersion", "src/test/java"]
-    }
-    java {
-      srcDirs = []
-    }
-  }
-}
-

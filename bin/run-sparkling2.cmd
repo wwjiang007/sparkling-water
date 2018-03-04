@@ -6,6 +6,7 @@ call %TOPDIR%\bin\sparkling-env.cmd
 rem Verify Spark installation
 call %LIBSW% checkSparkHome
 call %LIBSW% checkSparkVersion
+call %LIBSW% checkFatJarExists
 rem end of checking Sparkling environment
 
 set DRIVER_CLASS=water.SparklingWaterDriver
@@ -34,7 +35,6 @@ call %SPARK_HOME%/bin/spark-submit2.cmd ^
  --master %MASTER% ^
  --driver-memory %DRIVER_MEMORY% ^
  --driver-java-options "%H2O_SYS_OPS%" ^
- --conf spark.driver.extraJavaOptions="-XX:MaxPermSize=384m" ^
  %VERBOSE% ^
  %TOPDIR%/assembly/build/libs/%FAT_JAR% ^
  %*

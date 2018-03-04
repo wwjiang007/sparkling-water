@@ -19,9 +19,10 @@ package org.apache.spark.h2o.converters
 
 
 import org.apache.spark.h2o._
+import org.apache.spark.h2o.backends.external.ExternalBackendUtils
 import org.apache.spark.h2o.utils.ReflectionUtils
 import org.apache.spark.internal.Logging
-import water.{ExternalFrameUtils, Key}
+import water.Key
 
 import scala.language.{implicitConversions, postfixOps}
 import scala.reflect.ClassTag
@@ -51,13 +52,13 @@ private[h2o] object ProductRDDConverter extends Logging {
 
     // in case of internal backend, store regular vector types
     // otherwise for external backend store expected types
-    val expectedTypes = if(hc.getConf.runsInInternalClusterMode){
+    val expectedTypes = if (hc.getConf.runsInInternalClusterMode) {
       vecTypes
-    }else{
-      ExternalFrameUtils.prepareExpectedTypes(ftypes)
+    } else {
+      ExternalBackendUtils.prepareExpectedTypes(ftypes)
     }
 
-    WriteConverterCtxUtils.convert[T](hc, rdd, keyName, fnames, expectedTypes, H2OFrameFromRDDProductBuilder.perTypedDataPartition())
+    WriteConverterCtxUtils.convert[T](hc, rdd, keyName, fnames, expectedTypes, Array.empty[Int], H2OFrameFromRDDProductBuilder.perTypedDataPartition())
   }
 }
 

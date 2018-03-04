@@ -17,6 +17,9 @@
 
 package org.apache.spark.h2o.converters
 
+import org.apache.spark._
+import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vectors}
+
 /**
   * Methods which each WriteConverterCtx has to implement.
   *
@@ -24,9 +27,13 @@ package org.apache.spark.h2o.converters
   * via unified API
   */
 trait WriteConverterCtx {
-  def createChunks(keyName: String, vecTypes: Array[Byte], chunkId: Int)
+  def createChunks(keyName: String, h2oTypes: Array[Byte], chunkId: Int, maxVecSizes: Array[Int], vecStartSize: Map[Int, Int] = Map.empty)
 
-  def closeChunks()
+  def closeChunks(numRows: Int = -1)
+
+  def startRow(rowIdx: Int)
+
+  def finishRow()
 
   def put(colIdx: Int, data: Boolean)
 
@@ -52,6 +59,10 @@ trait WriteConverterCtx {
 
   def putNA(colIdx: Int)
 
+  def putSparseVector(startIdx: Int, vector: mllib.linalg.SparseVector, maxVecSize: Int)
+
+  def putDenseVector(startIdx: Int, vector: mllib.linalg.DenseVector, maxVecSize: Int)
+
   def putAnySupportedType[T](colIdx: Int, data: T): Unit = {
     data match {
       case n: Boolean => put(colIdx, n)
@@ -68,6 +79,16 @@ trait WriteConverterCtx {
       case _ => putNA(colIdx)
     }
   }
+
+  def putVector(startIdx: Int, vec: mllib.linalg.Vector, maxVecSize: Int): Unit = {
+    if (vec.isInstanceOf[SparseVector]) {
+      putSparseVector(startIdx, vec.asInstanceOf[SparseVector], maxVecSize)
+    } else {
+      putDenseVector(startIdx, vec.asInstanceOf[DenseVector], maxVecSize)
+    }
+  }
+
+  def putVector(startIdx: Int, vec: ml.linalg.Vector, maxVecSize: Int): Unit = putVector(startIdx, Vectors.fromML(vec), maxVecSize)
 
   def numOfRows(): Int
 }

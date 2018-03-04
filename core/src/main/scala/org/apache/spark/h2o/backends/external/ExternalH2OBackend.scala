@@ -27,7 +27,8 @@ import org.apache.spark.h2o.utils.NodeDesc
 import org.apache.spark.h2o.{H2OConf, H2OContext}
 import org.apache.spark.internal.Logging
 import water.api.RestAPIManager
-import water.{H2O, H2OStarter}
+import water.util.Log
+import water.{H2O, H2OStarter, HeartBeatThread}
 
 import scala.io.Source
 import scala.util.control.NoStackTrace
@@ -35,8 +36,10 @@ import scala.util.control.NoStackTrace
 
 class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with ExternalBackendUtils with Logging {
 
-  private var yarnAppId: Option[String] = None
+  var yarnAppId: Option[String] = None
   private var externalIP: Option[String] = None
+  private var cloudHealthCheckKillThread: Option[Thread] = None
+  private var cloudHealthCheckThread: Option[Thread] = None
 
   def launchH2OOnYarn(conf: H2OConf): String = {
     import ExternalH2OBackend._
@@ -58,12 +61,13 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     cmdToLaunch = cmdToLaunch ++ Seq[String](
       conf.YARNQueue.map("-Dmapreduce.job.queuename=" + _).getOrElse(""),
       s"-Dmapreduce.job.tags=${yarnAppTags}",
+      "-Dmapreduce.framework.name=h2o-yarn", // use H2O's custom application Master
       "-nodes", conf.numOfExternalH2ONodes.get,
       "-notify", conf.clusterInfoFile.get,
-      "-J", "-md5skip",
       "-jobname", conf.cloudName.get,
       "-mapperXmx", conf.mapperXmx,
       "-output", conf.HDFSOutputDir.get,
+      "-nthreads", conf.nthreads.toString,
       "-J", "-log_level", "-J", conf.h2oNodeLogLevel,
       "-timeout", conf.clusterStartTimeout.toString,
       "-disown",
@@ -71,6 +75,23 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
       "-J", "-watchdog_client_connect_timeout", "-J", conf.clientConnectionTimeout.toString,
       "-J", "-watchdog_client_retry_timeout", "-J", conf.clientCheckRetryTimeout.toString
     )
+
+    if (conf.h2oDriverIf.isDefined) {
+      cmdToLaunch = cmdToLaunch ++ Seq[String]("-driverif", conf.h2oDriverIf.get)
+    }
+
+    if (!hc.getConf.h2oNodeWebEnabled) {
+      cmdToLaunch = cmdToLaunch ++ Seq[String]("-J", "-disable_web")
+    }
+
+    if (hc.getConf.nodeNetworkMask.isDefined) {
+      cmdToLaunch = cmdToLaunch ++ Seq("-network", hc.getConf.nodeNetworkMask.get)
+    }
+
+    val loginArgs = getLoginArgs(conf)
+    if (loginArgs.nonEmpty) {
+      cmdToLaunch = cmdToLaunch ++ loginArgs
+    }
 
     // start external H2O cluster and log the output
     logInfo("Command used to start H2O on yarn: " + cmdToLaunch.mkString(" "))
@@ -92,17 +113,17 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     logInfo(processOut.toString)
     logError(processErr.toString)
 
-
-    if (!new File(hc.getConf.clusterInfoFile.get).exists()) {
+    val notifFile = new File(hc.getConf.clusterInfoFile.get)
+    if (!notifFile.exists()) {
       throw new RuntimeException(
-        """
-          |Cluster notification file could not be created. The possible causes are:
-          |
+        s"""
+           |Cluster notification file ${notifFile.getAbsolutePath} could not be created. The possible causes are:
+           |
           |1) External H2O cluster did not cloud within the pre-defined timeout. In that case, please try
-          |   to increase the timeout for starting the external cluster as:
-          |   Python: H2OConf(sc).set_cluster_start_timeout(timeout)....
-          |   Scala:  new H2OConf(sc).setClusterStartTimeout(timeout)....
-          |
+           |   to increase the timeout for starting the external cluster as:
+           |   Python: H2OConf(sc).set_cluster_start_timeout(timeout)....
+           |   Scala:  new H2OConf(sc).setClusterStartTimeout(timeout)....
+           |
           |2) The file could not be created because of missing write rights.""".stripMargin
       )
     }
@@ -111,7 +132,8 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     val ipPort = clusterInfo.next()
     yarnAppId = Some(clusterInfo.next().replace("job", "application"))
     externalIP = Some(ipPort)
-
+    // we no longer need the notification file
+    new File(hc.getConf.clusterInfoFile.get).delete()
     logInfo(s"Yarn ID obtained from cluster file: $yarnAppId")
     logInfo(s"Cluster ip and port obtained from cluster file: $ipPort")
 
@@ -141,7 +163,7 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     }
     // Register web API for client
     RestAPIManager(hc).registerAll()
-    H2O.finalizeRegistration()
+    H2O.startServingRestApi()
 
     if (cloudMembers.length == 0) {
       if (hc.getConf.isManualClusterStartUsed) {
@@ -164,6 +186,35 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
           "Please check the YARN logs.")
       }
     }
+
+    if (hc.getConf.isKillOnUnhealthyClusterEnabled) {
+      cloudHealthCheckKillThread = Some(new Thread {
+        override def run(): Unit = {
+          while (true) {
+            Thread.sleep(hc.getConf.killOnUnhealthyClusterInterval)
+            if (!H2O.CLOUD.healthy() && hc.getConf.isKillOnUnhealthyClusterEnabled) {
+              Log.err("Exiting! External H2O cloud not healthy!!")
+              H2O.shutdown(-1)
+            }
+          }
+        }
+      })
+
+      cloudHealthCheckKillThread.get.start()
+    }
+
+    cloudHealthCheckThread = Some(new Thread {
+      override def run(): Unit = {
+        while (true) {
+          Thread.sleep(hc.getConf.healthCheckInterval)
+          if (!H2O.CLOUD.healthy()) {
+            Log.err("External H2O cloud not healthy!!")
+          }
+        }
+      }
+    })
+    cloudHealthCheckThread.get.start()
+
     cloudMembers
   }
 
@@ -179,6 +230,7 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
       hc.sparkContext.stop()
     }
     H2O.orderlyShutdown(1000)
+    H2O.exit(0)
   }
 
   override def checkAndUpdateConf(conf: H2OConf): H2OConf = {
@@ -227,6 +279,15 @@ class ExternalH2OBackend(val hc: H2OContext) extends SparklingBackend with Exter
     }
     conf
   }
+
+  override def epilog =
+    if (hc._conf.isAutoClusterStartUsed) {
+      s"""
+         | * Yarn App ID of external H2O cluster: ${yarnAppId.get}
+    """.stripMargin
+    } else {
+      ""
+    }
 }
 
 object ExternalH2OBackend {

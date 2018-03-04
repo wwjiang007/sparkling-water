@@ -22,13 +22,13 @@ import org.apache.spark.h2o.{H2OContext, H2OFrame}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import water.Iced
-import water.api.Handler
+import water.api.{Handler, HandlerFactory, RestApiContext}
 import water.exceptions.H2ONotFoundArgumentException
 
 /**
   * Handler for all RDD related queries
   */
-class RDDsHandler(val sc: SparkContext, val h2oContext: H2OContext) extends Handler{
+class RDDsHandler(val sc: SparkContext, val h2oContext: H2OContext) extends Handler {
 
   def list(version: Int, s: RDDsV3): RDDsV3 = {
     val r = s.createAndFillImpl()
@@ -53,7 +53,7 @@ class RDDsHandler(val sc: SparkContext, val h2oContext: H2OContext) extends Hand
   private[RDDsHandler] def convertToH2OFrame(rdd: RDD[_], name: Option[String]): H2OFrame = {
     if (rdd.isEmpty()) {
       // transform empty Seq in order to create empty H2OFrame
-      h2oContext.asH2OFrame(sc.parallelize(Seq.empty[Int]),name)
+      h2oContext.asH2OFrame(sc.parallelize(Seq.empty[Int]), name)
     } else {
       rdd.first() match {
         case t if t.isInstanceOf[Double] => h2oContext.asH2OFrame(rdd.asInstanceOf[RDD[Double]], name)
@@ -99,7 +99,7 @@ private[api] object IcedRDDInfo {
 
 /** Simple implementation pojo holding list of RDDs */
 private[api] class RDDs extends Iced[RDDs] {
-  var rdds: Array[IcedRDDInfo]  = _
+  var rdds: Array[IcedRDDInfo] = _
 }
 
 
@@ -109,3 +109,24 @@ private[api] class IcedRDD2H2OFrameID(val rdd_id: Integer, val h2oframe_id: Stri
   //RequestServer, as it calls constructor without any arguments
 }
 
+object RDDsHandler {
+  private[api] def registerEndpoints(context: RestApiContext, sc: SparkContext, h2oContext: H2OContext) = {
+
+    val rddsHandler = new RDDsHandler(sc, h2oContext)
+
+    def rddsFactory = new HandlerFactory {
+      override def create(aClass: Class[_ <: Handler]): Handler = rddsHandler
+    }
+
+    context.registerEndpoint("listRDDs", "GET", "/3/RDDs", classOf[RDDsHandler], "list",
+      "Return all RDDs within Spark cloud", rddsFactory)
+
+    context.registerEndpoint("getRDD", "POST", "/3/RDDs/{rdd_id}", classOf[RDDsHandler],
+      "getRDD", "Get RDD with the given ID from Spark cloud", rddsFactory)
+
+    context.registerEndpoint("rddToH2OFrame", "POST", "/3/RDDs/{rdd_id}/h2oframe",
+      classOf[RDDsHandler], "toH2OFrame", "Transform RDD with the given ID to H2OFrame", rddsFactory)
+
+  }
+
+}

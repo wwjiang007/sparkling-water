@@ -17,15 +17,25 @@
 
 package org.apache.spark.h2o.utils
 
-import org.apache.spark.h2o.WrongSparkVersion
-import org.apache.spark.internal.Logging
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, File}
+import java.net.URI
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.zip.{ZipEntry, ZipOutputStream}
+
 import org.apache.spark.SparkContext
-import language.postfixOps
+import org.apache.spark.h2o.BuildInfo
+import org.apache.spark.internal.Logging
+import water.H2O
+import water.fvec.Frame
+import water.util.{GetLogsFromNode, Log, StringUtils}
+
+import scala.language.postfixOps
 
 /**
   * Support methods for H2OContext.
   */
-private[spark] trait H2OContextUtils extends Logging{
+private[spark] trait H2OContextUtils extends Logging {
 
   /**
     * Open browser for given address.
@@ -56,34 +66,126 @@ private[spark] trait H2OContextUtils extends Logging{
     * executes for example spark-shell command with sparkling water assembly jar passed as --jars and initiates H2OContext.
     * (Because in that case no check for correct Spark version has been done so far.)
     */
-  def isRunningOnCorrectSpark(sc: SparkContext) = sc.version.startsWith(buildSparkMajorVersion)
+  def isRunningOnCorrectSpark(sc: SparkContext) = sc.version.startsWith(BuildInfo.buildSparkMajorVersion)
 
+
+  def withConversionDebugPrints[R <: Frame](sc: SparkContext, conversionName: String, block: => R): R = {
+    val propName = "spark.h2o.measurements.timing"
+    val performancePrintConf = sc.getConf.getOption(propName).orElse(sys.props.get(propName))
+
+    if (performancePrintConf.nonEmpty && performancePrintConf.get.toBoolean) {
+      val t0 = System.nanoTime()
+      val result = block
+      val t1 = System.nanoTime()
+      Log.info(s"Elapsed time of the ${conversionName} conversion into H2OFrame ${result._key}: " + (t1 - t0) / 1000 + " millis")
+      result
+    } else {
+      block
+    }
+  }
 
   /**
-    * Returns Major Spark version for which is this version of Sparkling Water designated.
-    *
-    * For example, for 1.6.1 returns 1.6
+    * @param destination directory where the logs will be downloaded
     */
-  def buildSparkMajorVersion = {
-    val VERSION_FILE: String = "/spark.version"
-    val stream = getClass.getResourceAsStream(VERSION_FILE)
-    
-    stream match {
-      case null => throw new WrongSparkVersion(s"Unknown spark version: $VERSION_FILE missing")
-      case s => try {
-        val version = scala.io.Source.fromInputStream(s).mkString
-
-        if (version.count('.'==) <= 1) {
-          // e.g., 1.6 or "new"
-          version
-        } else {
-          // 1.4
-          version.substring(0, version.lastIndexOf('.'))
+  def downloadH2OLogs(destination: URI): URI = {
+    val perNodeZipByteArray = H2O.CLOUD.members.zipWithIndex.map { case (node, i) =>
+      // Skip nodes that aren't healthy, since they are likely to cause the entire process to hang.
+      try {
+        if (node.isHealthy) {
+          val g = new GetLogsFromNode()
+          g.nodeidx = i
+          g.doIt()
+          g.bytes
         }
-      } catch {
-        case x: Exception => throw new WrongSparkVersion(s"Failed to read spark version from  $VERSION_FILE: ${x.getMessage}")
+        else {
+          StringUtils.bytesOf("Node not healthy")
+        }
+      }
+      catch {
+        case e: Exception =>
+          StringUtils.toBytes(e)
       }
     }
-    
+
+    val clientNodeByteArray = if (H2O.ARGS.client) {
+      try {
+        val g = new GetLogsFromNode
+        g.nodeidx = -1
+        g.doIt()
+        g.bytes
+      } catch {
+        case e: Exception =>
+          StringUtils.toBytes(e)
+      }
+    } else {
+      null
+    }
+
+    val outputFileStem = "h2ologs_" + new SimpleDateFormat("yyyyMMdd_hhmmss").format(new Date)
+    zipLogs(perNodeZipByteArray, clientNodeByteArray, outputFileStem, destination)
   }
+
+  def downloadH2OLogs(destination: String): String = {
+    downloadH2OLogs(new URI(destination))
+    destination
+  }
+
+  /** Zip the H2O logs and store them to specified destination */
+  private def zipLogs(results: Array[Array[Byte]], clientResult: Array[Byte], topDir: String, destination: URI): URI = {
+    assert(H2O.CLOUD._memary.length == results.length, "Unexpected change in the cloud!")
+    val l = results.map(_.length).sum
+    val baos = new ByteArrayOutputStream(l)
+    // Add top-level directory.
+    val zos = new ZipOutputStream(baos)
+    val zde = new ZipEntry(topDir + File.separator)
+    zos.putNextEntry(zde)
+
+    try {
+      // Add zip directory from each cloud member.
+      results.zipWithIndex.foreach { case (result, i) =>
+        val filename = topDir + File.separator + "node" + i + "_" + H2O.CLOUD._memary(i).getIpPortString.replace(':', '_').replace('/', '_') + ".zip"
+        val ze = new ZipEntry(filename)
+        zos.putNextEntry(ze)
+        zos.write(result)
+        zos.closeEntry()
+      }
+
+      // Add zip directory from the client node.  Name it 'driver' since that's what Sparking Water users see.
+      if (clientResult != null) {
+        val filename = topDir + File.separator + "driver.zip"
+        val ze = new ZipEntry(filename)
+        zos.putNextEntry(ze)
+        zos.write(clientResult)
+        zos.closeEntry()
+      }
+      // Close the top-level directory.
+      zos.closeEntry()
+    } finally {
+      // Close the full zip file.
+      zos.close()
+    }
+
+    import java.io.FileOutputStream
+    try {
+      val outputStream = new FileOutputStream(destination.toString)
+      try {
+        baos.writeTo(outputStream)
+      }
+      finally {
+        if (outputStream != null) outputStream.close()
+      }
+    }
+    destination
+  }
+
+
+  def isRunningOnDatabricks(): Boolean = {
+    try {
+      Class.forName("com.databricks.backend.daemon.driver.DriverLocal")
+      true
+    } catch {
+      case _: ClassNotFoundException => false
+    }
+  }
+
 }

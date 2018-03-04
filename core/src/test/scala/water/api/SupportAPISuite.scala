@@ -16,16 +16,21 @@
 */
 package water.api
 
+import java.io.File
+
 import org.apache.spark.SparkContext
-import org.apache.spark.h2o.utils.SharedSparkTestContext
+import org.apache.spark.h2o.utils.SharedH2OTestContext
+import org.apache.spark.ml.linalg.Vectors
+import org.apache.spark.sql.DataFrame
 import org.scalatest.FunSuite
 import water.fvec.{AppendableVec, Frame, NewChunk, Vec}
 import water.munging.JoinMethod
 
 import scala.collection.immutable.IndexedSeq
 import scala.reflect.ClassTag
+import scala.util.Random
 
-class SupportAPISuite extends FunSuite with SharedSparkTestContext {
+class SupportAPISuite extends FunSuite with SharedH2OTestContext {
 
   override def createSparkContext: SparkContext = new SparkContext("local[*]", "test-local", conf = defaultSparkConf)
 
@@ -46,20 +51,20 @@ class SupportAPISuite extends FunSuite with SharedSparkTestContext {
     val NA = null.asInstanceOf[Int]
 
     val testSpace: Array[(String, JOIN_TYPE, Array[(JoinMethod, Boolean)], Array[(String, Int, Int)])] =
-      // Join type, join method, enabled, expected result
+    // Join type, join method, enabled, expected result
       Array(("LEFT", leftJoin _,
-              Array((RADIX, true), (HASH, true)),
-              Array(("A", 12, NA), ("B", 13, 20000), ("C", 14, NA), ("D", 15, 40000))),
-            ("RIGHT", rightJoin _,
-              Array((RADIX, false), (HASH, true)),
-              Array(("Y", NA, 10000), ("B", 13, 20000), ("X", NA, 10000), ("D", 15, 40000))),
-            ("INNER", innerJoin _,
-              Array((RADIX, true), (HASH, true)),
-              Array(("B", 13, 20000), ("D", 15, 40000))),
-            ("OUTER", outerJoin _,
-              Array((RADIX, false), (HASH, false)),
-              Array(("A", 12, NA), ("B", 13, 20000), ("C", 14, NA), ("D", 15, 40000), ("X", NA, 10000), ("Y", NA, 10000)))
-            )
+        Array((RADIX, true), (HASH, true)),
+        Array(("A", 12, NA), ("B", 13, 20000), ("C", 14, NA), ("D", 15, 40000))),
+        ("RIGHT", rightJoin _,
+          Array((RADIX, false), (HASH, true)),
+          Array(("Y", NA, 10000), ("B", 13, 20000), ("X", NA, 10000), ("D", 15, 40000))),
+        ("INNER", innerJoin _,
+          Array((RADIX, true), (HASH, true)),
+          Array(("B", 13, 20000), ("D", 15, 40000))),
+        ("OUTER", outerJoin _,
+          Array((RADIX, false), (HASH, false)),
+          Array(("A", 12, NA), ("B", 13, 20000), ("C", 14, NA), ("D", 15, 40000), ("X", NA, 10000), ("Y", NA, 10000)))
+      )
     println(testSpace.mkString("\n"))
 
     try {
@@ -85,6 +90,25 @@ class SupportAPISuite extends FunSuite with SharedSparkTestContext {
 
 object TestUtils {
 
+  def locate(name: String): String = {
+    val abs = new File("/home/0xdiag/" + name)
+    if (abs.exists()) {
+      abs.getAbsolutePath
+    } else {
+      new File("./examples/" + name).getAbsolutePath
+    }
+  }
+
+  // Note: this comparision expects implicit ordering of spark DataFrames which is not ensured!
+  def assertEqual(df1: DataFrame, df2: DataFrame, msg: String = "DataFrames are not same!"): Unit = {
+    val l1 = df1.repartition(1).collect()
+    val l2 = df2.repartition(1).collect()
+
+    assert(l1.zip(l2).forall { case (row1, row2) =>
+      row1.equals(row2)
+    }, "DataFrames are not same!")
+  }
+
   def frame(name: String, vec: Vec): Frame = {
     val f: Frame = new Frame(water.Key.make[Frame]())
     f.add(name, vec)
@@ -105,6 +129,12 @@ object TestUtils {
     val vec = avec.layout_and_close(fs)
     fs.blockForPending
     vec
+  }
+
+  def sparseVector(len: Int, elements: Int, rng: Random = Random): org.apache.spark.ml.linalg.SparseVector = {
+    assert(elements < len)
+    val data = (1 to elements).map(_ => rng.nextInt(len)).sortBy(identity).distinct.map(it => (it, rng.nextDouble()))
+    Vectors.sparse(len, data).toSparse
   }
 
   implicit object TestJoinSupportConverter extends ((Frame, Int) => (String, Int, Int)) {
@@ -132,7 +162,7 @@ object TestUtils {
       val actualData = frameTo[(String, Int, Int)](actual).sortBy(_._1)
       val expectedData = expected.sortBy(_._1)
       expectedData.zip(actualData).foreach { case (exp, act) =>
-          assert(exp == act, s"The rows have to match: ${expectedData.mkString(",")}\n!=\n${actualData.mkString(",")}")
+        assert(exp == act, s"The rows have to match: ${expectedData.mkString(",")}\n!=\n${actualData.mkString(",")}")
       }
     }
   }

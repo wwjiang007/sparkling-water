@@ -20,8 +20,8 @@ class H2OConf(object):
 
 
     def _do_init(self, spark_session):
-        self._ss = spark_session
-        self._sc = self._ss._sc
+        self._spark_session = spark_session
+        self._sc = self._spark_session._sc
         jvm = self._sc._jvm
         jsc = self._sc._jsc
         # Create instance of H2OConf class
@@ -33,21 +33,8 @@ class H2OConf(object):
         else:
             return None
 
-    def runs_in_external_cluster_mode(self):
-        return self._jconf.runsInExternalClusterMode()
 
-    def runs_in_internal_cluster_mode(self):
-        return self._jconf.runsInInternalClusterMode()
-
-    # setters for most common properties
-    # TODO: Create setters and getters for all properties
-    def set_cloud_name(self, cloud_name):
-        self._jconf.setCloudName(cloud_name)
-        return self
-
-    def set_num_of_external_h2o_nodes(self, num_of_external_h2o_nodes):
-        self._jconf.setNumOfExternalH2ONodes(num_of_external_h2o_nodes)
-        return self
+    # setters independent on selected backend
 
     def set_internal_cluster_mode(self):
         self._jconf.setInternalClusterMode()
@@ -57,67 +44,231 @@ class H2OConf(object):
         self._jconf.setExternalClusterMode()
         return self
 
-    def set_client_ip(self, ip):
-        self._jconf.setClientIp(ip)
+    def set_cloud_name(self, cloud_name):
+        self._jconf.setCloudName(cloud_name)
         return self
 
-    def set_client_network_mask(self, mask):
-        self._jconf.setClientNetworkMask(mask)
+    def set_nthreads(self, nthreads):
+        self._jconf.setNthreads(nthreads)
         return self
 
-    def set_flatfile_path(self, flatfile_path):
-        self._jconf.setFlatFilePath(flatfile_path)
+    def set_ga_enabled(self):
+        self._jconf.setGAEnabled()
         return self
 
-    def set_h2o_cluster(self, ip, port):
-        self._jconf.setH2OCluster(ip, port)
+    def set_ga_disabled(self):
+        self._jconf.setGADisabled()
         return self
 
-    def set_yarn_queue(self, queue_name):
-        self._jconf.setYARNQueue(queue_name)
+    def set_repl_enabled(self):
+        self._jconf.setReplEnabled()
         return self
 
-    def set_h2o_driver_path(self, driver_path):
-        self._jconf.setH2ODriverPath(driver_path)
+    def set_repl_disabled(self):
+        self._jconf.setReplDisabled()
         return self
 
-    def set_hdfs_output_dir(self, hdfs_output_dir):
-        self._jconf.setHDFSOutputDir(hdfs_output_dir)
+    def set_default_num_repl_sessions(self, num_sessions):
+        self._jconf.setDefaultNumReplSessions(num_sessions)
         return self
 
-    def set_mapper_xmx(self, mem):
-        self._jconf.setMapperXmx(mem)
+    def set_cluster_topology_listener_enabled(self):
+        self._jconf.setClusterTopologyListenerEnabled()
         return self
 
-    def set_cluster_config_file(self, path):
-        self._jconf.setClusterConfigFile(path)
+    def set_cluster_topology_listener_disabled(self):
+        self._jconf.setClusterTopologyListenerDisabled()
         return self
 
-    def use_auto_cluster_start(self):
-        self._jconf.useAutoClusterStart()
+    def set_spark_version_check_enabled(self):
+        self._jconf.setSparkVersionCheckEnabled()
         return self
 
-    def use_manual_cluster_start(self):
-        self._jconf.useManualClusterStart()
+    def set_spark_version_check_disabled(self):
+        self._jconf.setSparkVersionCheckDisabled()
+        return self
+
+    def set_fail_on_unsupported_spark_param_enabled(self):
+        self._jconf.setFailOnUnsupportedSparkParamEnabled()
+        return self
+
+    def set_fail_on_unsupported_spark_param_disabled(self):
+        self._jconf.setFailOnUnsupportedSparkParamDisabled()
+        return self
+
+    def set_jks(self, path):
+        self._jconf.setJks(path)
+        return self
+
+    def set_jks_pass(self, password):
+        self._jconf.setJksPass(password)
+        return self
+
+    def set_hash_login_enabled(self):
+        self._jconf.setHashLoginEnabled()
+        return self
+
+    def set_hash_login_disabled(self):
+        self._jconf.setHashLoginDisabled()
+        return self
+
+    def set_ldap_login_enabled(self):
+        self._jconf.setLdapLoginEnabled()
+        return self
+
+    def set_ldap_login_disabled(self):
+        self._jconf.setLdapLoginDisabled()
+        return self
+
+    def set_kerberos_login_enabled(self):
+        self._jconf.setKerberosLoginEnabled()
+        return self
+
+    def set_kerberos_login_disabled(self):
+        self._jconf.setKerberosLoginDisabled()
+        return self
+
+    def set_login_conf(self, file):
+        self._jconf.setLoginConf(file)
+        return self
+
+    def set_user_name(self, username):
+        self._jconf.setUserName(username)
+        return self
+
+    def set_ssl_conf(self, path):
+        self._jconf.setSslConf(path)
         return self
 
     def set_h2o_node_log_level(self, level):
         self._jconf.setH2ONodeLogLevel(level)
         return self
 
-    def set_cluster_start_timeout(self, timeout):
-        """Set timeout for start of external cluster. If the cluster is not able to cloud within the timeout the
-        the exception is thrown.
+    def set_h2o_node_log_dir(self, dir):
+        self._jconf.setH2ONodeLogDir(dir)
+        return self
 
-        Arguments:
-        timeout -- timeout in seconds
-        
-        """
-        self._jconf.setClusterStartTimeout(timeout)
+    def set_ui_update_interval(self, interval):
+        self._jconf.setUiUpdateInterval(interval)
+        return self
+
+    def set_cloud_timeout(self, timeout):
+        self._jconf.setCloudTimeout(timeout)
+        return self
+
+    def set_h2o_node_web_enabled(self):
+        self._jconf.setH2ONodeWebEnabled()
+        return self
+
+    def set_h2o_node_web_disabled(self):
+        self._jconf.setH2ONodeWebDisabled()
+        return self
+
+    def set_node_network_mask(self, mask):
+        self._jconf.setNodeNetworkMask(mask)
+        return self
+
+    def set_flow_dir(self, dir):
+        self._jconf.setFlowDir(dir)
+        return self
+
+    def set_client_ip(self, ip):
+        self._jconf.setClientIp(ip)
+        return self
+
+    def set_client_iced_dir(self, iced_dir):
+        self._jconf.setClientIcedDir(iced_dir)
         return self
 
     def set_h2o_client_log_level(self, level):
         self._jconf.setH2OClientLogLevel(level)
+        return self
+
+    def set_h2o_client_log_dir(self, dir):
+        self._jconf.setH2OClientLogDir(dir)
+        return self
+
+    def set_client_port_base(self, baseport):
+        self._jconf.setClientPortBase(baseport)
+        return self
+
+    def set_client_verbose_enabled(self):
+        self._jconf.setClientVerboseEnabled()
+        return self
+
+    def set_client_verbose_disabled(self):
+        self._jconf.setClientVerboseDisabled()
+        return self
+
+    def set_client_network_mask(self, mask):
+        self._jconf.setClientNetworkMask(mask)
+        return self
+
+    # setters for internal backend
+
+    def set_flatfile_enabled(self):
+        self._jconf.setFlatFileEnabled()
+        return self
+
+    def set_flatfile_disabled(self):
+        self._jconf.setFlatFileDisabled()
+        return self
+
+    def set_num_h2o_workers(self, num_workers):
+        self._jconf.setNumH2OWorkers(num_workers)
+        return self
+
+    def set_drdd_mul_factor(self, factor):
+        self._jconf.setDrddMulFactor(factor)
+        return self
+
+    def set_num_rdd_retries(self, retries):
+        self._jconf.setNumRddRetries(retries)
+        return self
+
+    def set_default_cloud_size(self, size):
+        self._jconf.setDefaultCloudSize(size)
+        return self
+
+    def set_subseq_tries(self, subseq_tries_num):
+        self._jconf.setSubseqTries(subseq_tries_num)
+        return self
+
+    def set_node_base_port(self, port):
+        self._jconf.setNodeBasePort(port)
+        return self
+
+    def set_node_iced_dir(self, dir):
+        self._jconf.setNodeIcedDir(dir)
+        return self
+
+    def set_internal_secure_connections_enabled(self):
+        self._jconf.setInternalSecureConnectionsEnabled()
+        return self
+
+    def set_internal_secure_connections_disabled(self):
+        self._jconf.setInternalSecureConnectionsDisabled()
+        return self
+
+
+    # setters for external backend
+
+    def set_h2o_cluster(self, ip, port):
+        self._jconf.setH2OCluster(ip, port)
+        return self
+
+    def set_num_of_external_h2o_nodes(self, num_of_external_h2o_nodes):
+        self._jconf.setNumOfExternalH2ONodes(num_of_external_h2o_nodes)
+        return self
+
+    def set_client_check_retry_timeout(self, timeout):
+        """Set retry interval how often nodes in the external cluster mode check for the presence of the h2o client.
+
+        Arguments:
+        timeout -- timeout in milliseconds
+
+        """
+        self._jconf.setClientCheckRetryTimeout(timeout)
         return self
 
     def set_client_connection_timeout(self, timeout):
@@ -126,19 +277,9 @@ class H2OConf(object):
 
         Arguments:
         timeout -- timeout in milliseconds
-        
+
         """
         self._jconf.setClientConnectionTimeout(timeout)
-        return self
-
-    def set_client_check_retry_timeout(self, timeout):
-        """Set retry interval how often nodes in the external cluster mode check for the presence of the h2o client.
-        
-        Arguments:
-        timeout -- timeout in milliseconds
-        
-        """
-        self._jconf.setClientCheckRetryTimeout(timeout)
         return self
 
     def set_external_read_confirmation_timeout(self, timeout):
@@ -149,119 +290,79 @@ class H2OConf(object):
         self._jconf.setExternalWriteConfirmationTimeout(timeout)
         return self
 
-    def set_ui_update_interval(self, interval):
-        self._jconf.setUiUpdateInterval(interval)
+    def set_cluster_start_timeout(self, timeout):
+        """Set timeout for start of external cluster. If the cluster is not able to cloud within the timeout the
+        the exception is thrown.
+
+        Arguments:
+        timeout -- timeout in seconds
+
+        """
+        self._jconf.setClusterStartTimeout(timeout)
         return self
 
-# getters
 
-    def ui_update_interval(self):
-        return self._jconf.uiUpdateInterval()
+    def set_cluster_config_file(self, path):
+        self._jconf.setClusterConfigFile(path)
+        return self
 
-    def client_connection_timeout(self):
-        return self._jconf.clientConnectionTimeout()
+    def set_mapper_xmx(self, mem):
+        self._jconf.setMapperXmx(mem)
+        return self
 
-    def client_check_retry_timeout(self):
-        return self._jconf.clientCheckRetryTimeout()
+    def set_hdfs_output_dir(self, hdfs_output_dir):
+        self._jconf.setHDFSOutputDir(hdfs_output_dir)
+        return self
 
-    def external_read_confirmation_timeout(self):
-        return self._jconf.externalReadConfirmationTimeout()
+    def use_auto_cluster_start(self):
+        self._jconf.useAutoClusterStart()
+        return self
 
-    def external_write_confirmation_timeout(self):
-        return self._jconf.externalWriteConfirmationTimeout()
+    def use_manual_cluster_start(self):
+        self._jconf.useManualClusterStart()
+        return self
 
-    def cluster_start_timeout(self):
-        return self._jconf.clusterStartTimeout()
+    def set_h2o_driver_path(self, driver_path):
+        self._jconf.setH2ODriverPath(driver_path)
+        return self
 
-    def h2o_cluster(self):
-        return self._get_option(self._jconf.h2oCluster)
+    def set_yarn_queue(self, queue_name):
+        self._jconf.setYARNQueue(queue_name)
+        return self
 
-    def yarn_queue(self):
-        return self._get_option(self._jconf.YARNQueue)
+    def set_h2o_driver_if(self, ip):
+        self._jconf.setH2ODriverIf(ip)
+        return self
 
-    def h2o_driver_path(self):
-        return self._get_option(self._jconf.h2oDriverPath)
+    def set_health_check_interval(self, interval):
+        self._jconf.setHealthCheckInterval(interval)
+        return self
 
-    def hdfs_output_dir(self):
-        return self._get_option(self._jconf.HDFSOutputDir)
+    def set_kill_on_unhealthy_cluster_enabled(self):
+        self._jconf.setKillOnUnhealthyClusterEnabled()
+        return self
 
-    def mapper_xmx(self):
-        return self._get_option(self._jconf.mapperXmx)
+    def set_kill_on_unhealthy_cluster_disabled(self):
+        self._jconf.setKillOnUnhealthyClusterDisabled()
+        return self
 
-    def cluster_config_file(self):
-        return self._get_option(self._jconf.clusterConfigFile)
+    def set_kill_on_unhealthy_cluster_interval(self, interval):
+        self._jconf.setKillOnUnhealthyClusterInterval(interval)
+        return self
 
-    def cluster_start_mode(self):
-        return self._jconf.clusterStartMode()
-
-    def is_auto_cluster_start_used(self):
-        return self._jconf.isAutoClusterStartUsed()
-
-    def is_manual_cluster_start_used(self):
-        return self._jconf.isManualClusterStartUsed()
-
-    def cloud_name(self):
-        return self._get_option(self._jconf.cloudName())
-
-    def num_of_external_h2o_nodes(self):
-        return self._get_option(self._jconf.numOfExternalH2ONodes())
-
-    def flatfile_path(self):
-        return self._get_option(self._jconf.flatFilePath())
-
-    def num_h2o_Workers(self):
-        return self._get_option(self._jconf.numH2OWorkers())
-
-    def use_flatfile(self):
-        return self._jconf.useFlatFile()
-
-    def node_base_port(self):
-        return self._jconf.nodeBasePort()
-
-    def cloud_timeout(self):
-        return self._jconf.cloudTimeout()
-
-    def drdd_mul_factor(self):
-        return self._jconf.drddMulFactor()
-
-    def num_rdd_retries(self):
-        return self._jconf.numRddRetries()
-
-    def default_cloud_size(self):
-        return self._jconf.defaultCloudSize()
-
-    def h2o_node_log_level(self):
-        return self._jconf.h2oNodeLogLevel()
-
-    def h2o_node_log_dir(self):
-        return self._jconf.h2oNodeLogDir()
-
-    def node_iced_dir(self):
-        return self._get_option(self._jconf.nodeIcedDir())
-
-    def subseq_tries(self):
-        return self._jconf.subseqTries()
+# getters independent on backend
 
     def backend_cluster_mode(self):
         return self._jconf.backendClusterMode()
 
-    def client_ip(self):
-        return self._get_option(self._jconf.clientIp())
+    def runs_in_external_cluster_mode(self):
+        return self._jconf.runsInExternalClusterMode()
 
-    def client_base_port(self):
-        return self._jconf.clientBasePort()
+    def runs_in_internal_cluster_mode(self):
+        return self._jconf.runsInInternalClusterMode()
 
-    def h2o_client_log_level(self):
-        return self._jconf.h2oClientLogLevel()
-
-    def h2o_client_log_dir(self):
-        return self._jconf.h2oClientLogDir()
-
-    def client_network_mask(self):
-        return self._get_option(self._jconf.clientNetworkMask())
-
-    def node_network_mask(self):
-        return self._get_option(self._jconf.nodeNetworkMask())
+    def cloud_name(self):
+        return self._get_option(self._jconf.cloudName())
 
     def nthreads(self):
         return self._jconf.nthreads()
@@ -269,11 +370,20 @@ class H2OConf(object):
     def disable_ga(self):
         return self._jconf.disableGA()
 
-    def client_web_port(self):
-        return self._jconf.clientWebPort()
+    def is_h2o_repl_enabled(self):
+        return self._jconf.isH2OReplEnabled()
 
-    def client_iced_dir(self):
-        return self._get_option(self._jconf.clientIcedDir())
+    def scala_int_default_num(self):
+        return self._jconf.scalaIntDefaultNum()
+
+    def is_cluster_topology_listener_enabled(self):
+        return self._jconf.isClusterTopologyListenerEnabled()
+
+    def is_spark_version_check_enabled(self):
+        return self._jconf.isSparkVersionCheckEnabled()
+
+    def is_fail_on_unsupported_spark_param_enabled(self):
+        return self._jconf.isFailOnUnsupportedSparkParamEnabled()
 
     def jks(self):
         return self._get_option(self._jconf.jks())
@@ -287,23 +397,156 @@ class H2OConf(object):
     def ldap_login(self):
         return self._jconf.ldapLogin()
 
+    def kerberos_login(self):
+        return self._jconf.kerberosLogin()
+
     def login_conf(self):
         return self._get_option(self._jconf.loginConf())
 
     def user_name(self):
         return self._get_option(self._jconf.userName())
 
-    def scala_int_default_num(self):
-        return self._jconf.scalaIntDefaultNum()
+    def ssl_conf(self):
+        return self._get_option(self._jconf.sslConf())
 
-    def is_h2o_repl_enabled(self):
-        return self._jconf.isH2OReplEnabled()
+    def h2o_node_log_level(self):
+        return self._jconf.h2oNodeLogLevel()
 
-    def is_cluster_topology_listener_enabled(self):
-        return self._jconf.isClusterTopologyListenerEnabled()
+    def h2o_node_log_dir(self):
+        return self._jconf.h2oNodeLogDir()
 
-    def is_spark_version_check_enabled(self):
-        return self._jconf.isSparkVersionCheckEnabled()
+    def ui_update_interval(self):
+        return self._jconf.uiUpdateInterval()
+
+    def cloud_timeout(self):
+        return self._jconf.cloudTimeout()
+
+    def h2o_node_web_enabled(self):
+        return self._jconf.h2oNodeWebEnabled()
+
+    def node_network_mask(self):
+        return self._get_option(self._jconf.nodeNetworkMask())
+
+    def flow_dir(self):
+        return self._get_option(self._jconf.flowDir())
+
+    def client_ip(self):
+        return self._get_option(self._jconf.clientIp())
+
+    def client_iced_dir(self):
+        return self._get_option(self._jconf.clientIcedDir())
+
+    def h2o_client_log_level(self):
+        return self._jconf.h2oClientLogLevel()
+
+    def h2o_client_log_dir(self):
+        return self._get_option(self._jconf.h2oClientLogDir())
+
+    def client_base_port(self):
+        return self._jconf.clientBasePort()
+
+    def client_web_port(self):
+        return self._jconf.clientWebPort()
+
+    def client_verbose_output(self):
+        return self._jconf.clientVerboseOutput()
+
+    def client_network_mask(self):
+        return self._get_option(self._jconf.clientNetworkMask())
+
+    # Getters for internal backend
+
+    def use_flatfile(self):
+        return self._jconf.useFlatFile()
+
+    def num_h2o_workers(self):
+        return self._get_option(self._jconf.numH2OWorkers())
+
+    def drdd_mul_factor(self):
+        return self._jconf.drddMulFactor()
+
+    def num_rdd_retries(self):
+        return self._jconf.numRddRetries()
+
+    def default_cloud_size(self):
+        return self._jconf.defaultCloudSize()
+
+    def subseq_tries(self):
+        return self._jconf.subseqTries()
+
+    def node_base_port(self):
+        return self._jconf.nodeBasePort()
+
+    def node_iced_dir(self):
+        return self._get_option(self._jconf.nodeIcedDir())
+
+    def is_internal_secure_connections_enabled(self):
+        return self._jconf.isInternalSecureConnectionsEnabled()
+
+    # Getters for external backend
+
+    def h2o_cluster(self):
+        return self._get_option(self._jconf.h2oCluster())
+
+    def h2o_cluster_host(self):
+        return self._get_option(self._jconf.h2oClusterHost())
+
+    def h2o_cluster_port(self):
+        return self._get_option(self._jconf.h2oClusterPort())
+
+    def num_of_external_h2o_nodes(self):
+        return self._get_option(self._jconf.numOfExternalH2ONodes())
+
+    def client_check_retry_timeout(self):
+        return self._jconf.clientCheckRetryTimeout()
+
+    def client_connection_timeout(self):
+        return self._jconf.clientConnectionTimeout()
+
+    def external_read_confirmation_timeout(self):
+        return self._jconf.externalReadConfirmationTimeout()
+
+    def external_write_confirmation_timeout(self):
+        return self._jconf.externalWriteConfirmationTimeout()
+
+    def cluster_start_timeout(self):
+        return self._jconf.clusterStartTimeout()
+
+    def cluster_config_file(self):
+        return self._get_option(self._jconf.clusterInfoFile())
+
+    def mapper_xmx(self):
+        return self._jconf.mapperXmx()
+
+    def hdfs_output_dir(self):
+        return self._get_option(self._jconf.HDFSOutputDir())
+
+    def cluster_start_mode(self):
+        return self._jconf.clusterStartMode()
+
+    def is_auto_cluster_start_used(self):
+        return self._jconf.isAutoClusterStartUsed()
+
+    def is_manual_cluster_start_used(self):
+        return self._jconf.isManualClusterStartUsed()
+
+    def h2o_driver_path(self):
+        return self._get_option(self._jconf.h2oDriverPath())
+
+    def yarn_queue(self):
+        return self._get_option(self._jconf.YARNQueue())
+
+    def h2o_driver_if(self):
+        return self._get_option(self._jconf.h2oDriverIf())
+
+    def get_health_check_interval(self):
+        return self._jconf.healthCheckInterval()
+
+    def is_kill_on_unhealthy_cluster_enabled(self):
+        return self._jconf.isKillOnUnhealthyClusterEnabled()
+
+    def kill_on_unhealthy_cluster_interval(self):
+        return self._jconf.killOnUnhealthyClusterInterval()
 
     def set(self, key, value):
         self._jconf.set(key, value)

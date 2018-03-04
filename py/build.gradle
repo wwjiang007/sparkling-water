@@ -11,18 +11,18 @@ ext {
 description = "PySparkling - Sparkling-Water Python Package"
 
 dependencies {
-  compile project(path: ':sparkling-water-assembly', configuration: 'shadow')
+    compile project(path: ':sparkling-water-assembly')
 }
-
 //
 // Create a file with version for Python dist task
 //
 task createVersionFile {
     doLast {
-        if (!pkgDir.exists()) {
-            pkgDir.mkdirs()
+        def versionFileDir = new File(pkgDir, "pysparkling")
+        if (!versionFileDir.exists()) {
+            versionFileDir.mkdirs()
         }
-        File version_file = new File(pkgDir, "version.txt")
+        File version_file = new File(versionFileDir, "version.txt")
         def version_txt = version.replace("-SNAPSHOT","")
         version_file.write(version_txt)
     }
@@ -43,6 +43,21 @@ def preparePythonEnv(environment) {
     if (SPARK_HOME != null) {
         environment['PYTHONPATH'] = "${SPARK_HOME}${FS}python${FPS}${py4jFile}${FPS}${environment['PYTHONPATH']}"
     }
+}
+
+//
+// Prepare Python environment to run python tests
+//
+def preparePythonTestEnv(environment){
+    // Add PySparkling zip on PYTHONPATH so unittests can access all the PySparkling packages
+    environment['PYTHONPATH'] = "${distPython.archivePath}${FPS}${environment['PYTHONPATH']}"
+    environment['spark.ext.h2o.backend.cluster.mode'] = detectBackendClusterMode()
+    environment["spark.ext.h2o.external.start.mode"] = detectExternalBackendStartMode()
+    // sparkling assembly jar is here because of external h2o tests
+    environment["sparkling.assembly.jar"] = configurations.compile.join(',')
+
+    environment['SPARK_WORKER_DIR'] = file('build/h2ologs-pyunit/nodes')
+    environment['SPARK_CONF_DIR'] = file("tests/conf/pyunit")
 }
 
 //
@@ -99,7 +114,7 @@ def copyPySetup() {
             include 'MANIFEST.in'
             include 'setup.cfg'
             include 'setup.py'
-            include 'pysparkling/*'
+            include 'pysparkling/**/*'
             exclude '**/*.pyc'
         }
         into pkgDir
@@ -143,9 +158,46 @@ task distPython(type: Zip, dependsOn: [checkPythonEnv, configurations.compile] )
         }
         // Copy basic python setup
         copyPySetup()
+
+        def replaceStr =
+                """
+import zipfile
+from os import path
+
+__version__ = "0.0.local"
+if '.zip' in here:
+    with zipfile.ZipFile(path.dirname(here), 'r') as archive:
+        __version__ = archive.read('h2o/version.txt').decode('utf-8').strip()
+else:
+    with open(path.join(here, 'version.txt'), encoding='utf-8') as f:
+        __version__ = f.read().strip()
+
+if '.zip' in here:
+    with zipfile.ZipFile(path.dirname(here), 'r') as archive:
+        __buildinfo__ = archive.read('h2o/buildinfo.txt').decode('utf-8').strip()
+else:
+    with open(path.join(here, 'buildinfo.txt'), encoding='utf-8') as f:
+        __buildinfo__ = f.read().strip()
+                """
+
+        // Change __init__.py in H2O to be aware of being zipped
+        def initFile = file("${project.pkgDir}/h2o/__init__.py")
+        def initContent = initFile.readLines()
+        def lineStart = initContent.findIndexOf {it == "with open(os.path.join(here, 'buildinfo.txt'), encoding='utf-8') as f:"}
+        def lineEnd = initContent.findIndexOf {it == "    __version__ = f.read()"}
+        if (lineStart != -1 && lineEnd != -1){
+            def before = initContent.subList(0, lineStart).join("\n")
+            def full = before + replaceStr + initContent.subList(lineEnd + 1, initContent.size()).join("\n")
+            initFile.write(full)
+        }
+
+
         // Copy sparkling water fatjar
+        def fatJarName = "sparkling-water-assembly_${scalaBaseVersion}-${version}-all.jar"
+        def fatJar = configurations.compile.filter{
+            it.absoluteFile.getName() == fatJarName}.singleFile
         copy {
-            from "${configurations.compile.join(',')}"
+            from fatJar
             into  file("${project.pkgDir}/sparkling_water")
             rename ".*", "sparkling_water_assembly.jar"
         }
@@ -168,35 +220,41 @@ artifacts {
     sdist distPython
 }
 
-//
-// Test python against Spark cloud
-//
-task testPython(type: Exec, dependsOn: [configurations.compile, distPython] ) {
+task testPythonConf(type: Exec, dependsOn: distPython){
     doFirst {
         preparePythonEnv(environment)
     }
-    // Add PySparkling zip on PYTHONPATH so unittests can access all the PySparkling packages
-    environment['PYTHONPATH'] = "${distPython.archivePath}${FPS}${environment['PYTHONPATH']}"
-    environment['spark.ext.h2o.backend.cluster.mode'] = detectBackendClusterMode()
-    // sparkling assembly jar is here because of external h2o tests
-    environment["sparkling.assembly.jar"] = configurations.compile.join(',')
-
-    // if this property is set up h2o cluster will be started on yarn instead on local machine
-    if(project.hasProperty("startH2OClusterOnYarn")){
-        environment["spark.ext.h2o.external.start.mode"] = "auto"
-    }
-    
-    environment['SPARK_WORKER_DIR'] = file('build/h2ologs-pyunit/nodes')
-    environment['SPARK_CONF_DIR'] = file("tests/conf/pyunit")
-
-    commandLine getOsSpecificCommandLine([pythonexec, "tests/tests_unit.py"])
+    preparePythonTestEnv(environment)
+    commandLine getOsSpecificCommandLine([pythonexec, "tests/tests_unit_conf.py"])
 }
+
+task testPythonConversions(type: Exec, dependsOn: distPython){
+    doFirst {
+        preparePythonEnv(environment)
+    }
+    preparePythonTestEnv(environment)
+    commandLine getOsSpecificCommandLine([pythonexec, "tests/tests_unit_conversions.py"])
+}
+
+task testPythonMojoPredictions(type: Exec, dependsOn: distPython){
+    doFirst {
+        preparePythonEnv(environment)
+    }
+    preparePythonTestEnv(environment)
+    commandLine getOsSpecificCommandLine([pythonexec, "tests/tests_unit_mojo_predictions.py"])
+}
+
+//
+// Test python against Spark cloud
+//
+task testPython(dependsOn: [testPythonConf, testPythonConversions, testPythonMojoPredictions]) {}
+
 
 //
 // Run python integration tests
 //
-task integTestPython(type: Exec, dependsOn: [configurations.compile, distPython] ) {
-    doFirst{
+task integTestPython(type: Exec, dependsOn: distPython) {
+    doFirst {
         preparePythonEnv(environment)
     }
     def testEnv = detectEnvironment()
@@ -204,6 +262,7 @@ task integTestPython(type: Exec, dependsOn: [configurations.compile, distPython]
     // Pass references to libraries to test launcher
     environment["sparkling.pysparkling.sdist"] = configurations.sdist.artifacts.files.singleFile.absolutePath
     environment['spark.ext.h2o.backend.cluster.mode'] = detectBackendClusterMode()
+    environment["spark.ext.h2o.external.start.mode"] = detectExternalBackendStartMode()
     // sparkling assembly jar is here because of external h2o tests
     environment["sparkling.assembly.jar"] = configurations.compile.join(',')
     environment["spark.testing"] = "true"
@@ -281,7 +340,6 @@ task buildPython(dependsOn: distPython)
 build.dependsOn buildPython
 
 test.dependsOn testPython
-
 def detectEnvironment(defaultEnv = "local") {
     def denv = [ project.hasProperty("sparklingTestEnv") ? project["sparklingTestEnv"] : null,
                     System.properties["sparklingTestEnv"],

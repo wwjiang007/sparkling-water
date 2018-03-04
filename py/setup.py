@@ -10,7 +10,7 @@ with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
 # Get the version from the relevant file
-with open(path.join(here, 'version.txt'), encoding='utf-8') as f:
+with open(path.join(here, 'pysparkling/version.txt'), encoding='utf-8') as f:
     version = f.read()
 
 setup(
@@ -33,7 +33,6 @@ setup(
         'Intended Audience :: Developers',
         'Topic :: Software Development :: Build Tools',
         'License :: OSI Approved :: Apache Software License',
-        'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.2',
@@ -47,9 +46,11 @@ setup(
     packages = find_packages(),
 
     # run-time dependencies
-    install_requires=['six', 'future', 'requests', 'tabulate'],
+    install_requires=['requests', 'tabulate', 'future', 'colorama'],
 
     # bundled binary packages
-    package_data={'sparkling_water': ['*.jar']},
+    package_data={'sparkling_water': ['*.jar'],
+                  'h2o': ['version.txt', 'buildinfo.txt'],
+                  'pysparkling': ['version.txt']},
 )
 

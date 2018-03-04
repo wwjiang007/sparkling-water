@@ -1,13 +1,6 @@
 //
 // Script tests support
 //
-// FIXME: this is not necessary anymore with new version of Idea
-idea {
-    module {
-        jdkName='inheried'
-        testSourceDirs += file('src/scriptsTest/scala')
-    }
-}
 
 sourceSets {
     scriptsTest {
@@ -28,7 +21,8 @@ configurations {
 task scriptsTest(type: Test) {
     group = 'Verification'
     description = 'Runs all scripts tests'
-    testClassesDir = sourceSets.scriptsTest.output.classesDir
+
+    testClassesDirs = sourceSets.scriptsTest.output.classesDirs
     classpath = sourceSets.scriptsTest.runtimeClasspath
 
     // Also setup expected Scala version for Spark launcher

@@ -18,12 +18,50 @@
 """
 Integration tests for pySparkling for Spark running in local
 """
-from integ_test_utils import IntegTestSuite
-import test_utils
+import generic_test_utils
+from integ_test_utils import *
+import unittest
 
-class LocalIntegTestSuite(IntegTestSuite):
-    pass
+class LocalIntegTestSuite(unittest.TestCase):
+
+    def test_pipeline_gbm_mojo(self):
+        env = IntegTestEnv()
+
+        env.set_spark_master("local")
+        env.conf("spark.yarn.max.executor.failures", 1) # In fail of executor, fail the test
+        env.conf("spark.executor.instances", 3)
+        env.conf("spark.executor.memory", "2g")
+        env.conf("spark.ext.h2o.port.base", 63331)
+        env.conf("spark.driver.memory", "2g")
+
+        launch(env, "examples/pipelines/ham_or_spam_gbm.py")
+
+    def test_pipeline_deep_learning(self):
+        env = IntegTestEnv()
+
+        env.set_spark_master("local")
+        # Configure YARN environment
+        env.conf("spark.yarn.max.executor.failures", 1) # In fail of executor, fail the test
+        env.conf("spark.executor.instances", 3)
+        env.conf("spark.executor.memory", "2g")
+        env.conf("spark.ext.h2o.port.base", 63331)
+        env.conf("spark.driver.memory", "2g")
+
+        launch(env, "examples/pipelines/ham_or_spam_deep_learning.py")
+
+    def test_import_pysparkling_standalone_app(self):
+        env = IntegTestEnv()
+
+        env.set_spark_master("local")
+        # Configure YARN environment
+        env.conf("spark.yarn.max.executor.failures", 1) # In fail of executor, fail the test
+        env.conf("spark.executor.instances", 3)
+        env.conf("spark.executor.memory", "2g")
+        env.conf("spark.ext.h2o.port.base", 63331)
+        env.conf("spark.driver.memory", "2g")
+
+        launch(env, "py/scripts/tests/pysparkling_ml_import_overrides_spark_test.py")
 
 
 if __name__ == '__main__':
-    test_utils.run_tests([LocalIntegTestSuite], file_name="py_integ_local_tests_report")
+    generic_test_utils.run_tests([LocalIntegTestSuite], file_name="py_integ_local_tests_report")

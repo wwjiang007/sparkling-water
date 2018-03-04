@@ -48,7 +48,13 @@ case class ComposedWithTimestamp(a: PrimitiveA, v: TimestampField)
 
 case class PrimitiveB(f: Seq[Int])
 
-case class PrimitiveC(f: mllib.linalg.Vector)
+case class PrimitiveMllibFixture(f: mllib.linalg.Vector)
+
+case class PrimitiveMlFixture(f: org.apache.spark.ml.linalg.Vector)
+
+case class ComplexMlFixture(f1: org.apache.spark.ml.linalg.Vector,
+                            idx: Int,
+                            f2: org.apache.spark.ml.linalg.Vector)
 
 case class Prostate(ID: Option[Long],
                     CAPSULE: Option[Int],
@@ -95,3 +101,9 @@ case class SemiPartialPerson(name: String, age: Option[Int], email: Option[Strin
 case class SampleString(x: String)
 
 case class SampleAltString(y: String)
+
+case class SparseVectorHolder(v: org.apache.spark.ml.linalg.SparseVector)
+
+case class Name(given: String, family: String)
+
+case class Person(name: Name, age: Int)

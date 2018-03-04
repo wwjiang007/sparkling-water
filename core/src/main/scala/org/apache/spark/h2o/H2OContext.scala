@@ -17,9 +17,11 @@
 
 package org.apache.spark.h2o
 
+import java.net.URI
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.spark._
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.h2o.backends.SparklingBackend
 import org.apache.spark.h2o.backends.external.ExternalH2OBackend
 import org.apache.spark.h2o.backends.internal.InternalH2OBackend
@@ -27,8 +29,10 @@ import org.apache.spark.h2o.converters._
 import org.apache.spark.h2o.ui._
 import org.apache.spark.h2o.utils.{H2OContextUtils, LogUtil, NodeDesc}
 import org.apache.spark.internal.Logging
+import org.apache.spark.network.Security
 import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import water._
+import water.util.{Log, LogBridge}
 
 import scala.collection.mutable
 import scala.language.{implicitConversions, postfixOps}
@@ -37,7 +41,7 @@ import scala.reflect.runtime.universe._
 import scala.util.control.NoStackTrace
 
 /**
-  * Main entry point for Sparkling Water functionality. H2O Context represents connection to H2O cluster and allows as
+  * Main entry point for Sparkling Water functionality. H2O Context represents connection to H2O cluster and allows us
   * to operate with it.
   *
   * H2O Context provides conversion methods from RDD/DataFrame to H2OFrame and back and also provides implicits
@@ -57,9 +61,9 @@ import scala.util.control.NoStackTrace
   * Create new H2OContext based on provided H2O configuration
   *
   * @param sparkSession Spark Session
-  * @param conf H2O configuration
+  * @param conf         H2O configuration
   */
-class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends Logging with H2OContextUtils {
+class H2OContext private(val sparkSession: SparkSession, conf: H2OConf) extends Logging with H2OContextUtils {
   self =>
   val announcementService = AnnouncementServiceFactory.create(conf)
   val sparkContext = sparkSession.sparkContext
@@ -74,9 +78,9 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
   private var stopped = false
 
   /** Used backend */
-  val backend: SparklingBackend = if(conf.runsInExternalClusterMode){
+  val backend: SparklingBackend = if (conf.runsInExternalClusterMode) {
     new ExternalH2OBackend(this)
-  }else{
+  } else {
     new InternalH2OBackend(this)
   }
 
@@ -92,34 +96,63 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
     * otherwise it creates new H2O cluster living in Spark
     */
   def init(): H2OContext = {
+    // Use H2O's logging as H2O info log level is default
+    Log.info("Sparkling Water version: " + BuildInfo.SWVersion)
+    Log.info("Spark version: " + sparkContext.version)
+    Log.info("Integrated H2O version: " + BuildInfo.H2OVersion)
+    Log.info("The following Spark configuration is used: \n    " + _conf.getAll.mkString("\n    "))
+    Log.info("")
     if (!isRunningOnCorrectSpark(sparkContext)) {
-      throw new WrongSparkVersion(s"You are trying to use Sparkling Water built for Spark $buildSparkMajorVersion," +
+      throw new WrongSparkVersion(s"You are trying to use Sparkling Water built for Spark ${BuildInfo.buildSparkMajorVersion}," +
         s" but your $$SPARK_HOME(=${sparkContext.getSparkHome().getOrElse("SPARK_HOME is not defined!")}) property" +
         s" points to Spark of version ${sparkContext.version}. Please ensure correct Spark is provided and" +
         s" re-run Sparkling Water.")
     }
+
+    // Check that we have Duke library available. It is available when using the assembly JAR at all cases, however,
+    // when Sparkling Water is used via --packages, it is not correctly resolved and needs to be set manually.
+    try {
+      Class.forName("no.priv.garshol.duke.Comparator")
+    } catch {
+      case _: ClassNotFoundException => throw new RuntimeException(s"When using the Sparkling Water as Spark package " +
+        s"via --packages option, the 'no.priv.garshol.duke:duke:1.2' dependency has to be specified explicitly due to" +
+        s" a bug in Spark dependency resolution.")
+    }
+
+    if (conf.isInternalSecureConnectionsEnabled) {
+      Security.enableSSL(sparkSession, conf)
+    }
+
     sparkContext.addSparkListener(sparklingWaterListener)
     // Init the H2O Context in a way provided by used backend and return the list of H2O nodes in case of external
     // backend or list of spark executors on which H2O runs in case of internal backend
     val nodes = backend.init()
-
     // Fill information about H2O client and H2O nodes in the cluster
-    h2oNodes.append(nodes:_*)
+    h2oNodes.append(nodes: _*)
     localClientIp = sys.env.getOrElse("SPARK_PUBLIC_DNS", sparkContext.env.rpcEnv.address.host)
     localClientPort = H2O.API_PORT
-    // Register UI
-    if (conf.getBoolean("spark.ui.enabled", true)) {
+    // Register UI, but not in Databricks as Databricks is not using standard Spark UI API
+    if (conf.getBoolean("spark.ui.enabled", true) && !isRunningOnDatabricks()) {
       new SparklingWaterUITab(sparklingWaterListener, sparkContext.ui.get)
     }
+
+    // Force initialization of H2O logs so flow and other dependant tools have logs available from the start
+    val level = LogBridge.getH2OLogLevel()
+    LogBridge.setH2OLogLevel(Log.TRACE) // just temporarily, set Trace Level so we can
+    // be sure the Log.trace will initialize the logging and creates the log files
+    Log.trace("H2OContext initialized") // force creation of log files
+    LogBridge.setH2OLogLevel(level) // set the level back on the level user want's to use
+
     logInfo("Sparkling Water started, status of context: " + this)
     // Announce Flow UI location
     announcementService.announce(FlowLocationAnnouncement(H2O.ARGS.name, "http", localClientIp, localClientPort))
     updateUIAfterStart() // updates the spark UI
     uiUpdateThread.start() // start periodical updates of the UI
+
     this
   }
 
-  private[this] def updateUIAfterStart(): Unit ={
+  private[this] def updateUIAfterStart(): Unit = {
     val h2oBuildInfo = H2OBuildInfo(
       H2O.ABV.projectVersion(),
       H2O.ABV.branchName(),
@@ -131,10 +164,11 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
     val h2oCloudInfo = H2OCloudInfo(
       h2oLocalClient,
       H2O.CLOUD.healthy(),
+      H2OSecurityManager.instance.securityEnabled,
       H2O.CLOUD.members().map(node => node.getIpPortString),
       backend.backendUIInfo,
       H2O.START_TIME_MILLIS.get()
-      )
+    )
 
     val swPropertiesInfo = _conf.getAll.filter(_._1.startsWith("spark.ext.h2o"))
 
@@ -144,6 +178,8 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
       swPropertiesInfo
     ))
   }
+
+
   /**
     * Return a copy of this H2OContext's configuration. The configuration ''cannot'' be changed at runtime.
     */
@@ -151,39 +187,51 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
 
   /** Transforms RDD[Supported type] to H2OFrame */
   def asH2OFrame(rdd: SupportedRDD): H2OFrame = asH2OFrame(rdd, None)
+
   def asH2OFrame(rdd: SupportedRDD, frameName: Option[String]): H2OFrame =
-    SupportedRDDConverter.toH2OFrame(this, rdd, frameName)
+    withConversionDebugPrints(sparkContext, "SupportedRDD", SupportedRDDConverter.toH2OFrame(this, rdd, frameName))
+
   def asH2OFrame(rdd: SupportedRDD, frameName: String): H2OFrame = asH2OFrame(rdd, Option(frameName))
 
 
   /** Transforms RDD[Supported type] to H2OFrame key */
   def toH2OFrameKey(rdd: SupportedRDD): Key[_] = toH2OFrameKey(rdd, None)
+
   def toH2OFrameKey(rdd: SupportedRDD, frameName: Option[String]): Key[_] = asH2OFrame(rdd, frameName)._key
+
   def toH2OFrameKey(rdd: SupportedRDD, frameName: String): Key[_] = toH2OFrameKey(rdd, Option(frameName))
 
   /** Transform DataFrame to H2OFrame */
   def asH2OFrame(df: DataFrame): H2OFrame = asH2OFrame(df, None)
+
   def asH2OFrame(df: DataFrame, frameName: Option[String]): H2OFrame =
-    SparkDataFrameConverter.toH2OFrame(this, df, frameName)
+    withConversionDebugPrints(sparkContext, "DataFrame", SparkDataFrameConverter.toH2OFrame(this, df, frameName))
+
   def asH2OFrame(df: DataFrame, frameName: String): H2OFrame = asH2OFrame(df, Option(frameName))
 
   /** Transform DataFrame to H2OFrame key */
-  def toH2OFrameKey(df : DataFrame): Key[Frame] = toH2OFrameKey(df, None)
-  def toH2OFrameKey(df : DataFrame, frameName: Option[String]): Key[Frame] = asH2OFrame(df, frameName)._key
-  def toH2OFrameKey(df : DataFrame, frameName: String): Key[Frame] = toH2OFrameKey(df, Option(frameName))
+  def toH2OFrameKey(df: DataFrame): Key[Frame] = toH2OFrameKey(df, None)
+
+  def toH2OFrameKey(df: DataFrame, frameName: Option[String]): Key[Frame] = asH2OFrame(df, frameName)._key
+
+  def toH2OFrameKey(df: DataFrame, frameName: String): Key[Frame] = toH2OFrameKey(df, Option(frameName))
 
   /** Transforms Dataset[Supported type] to H2OFrame */
-  def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T]): H2OFrame = asH2OFrame(ds, None)
-  def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): H2OFrame =
-    DatasetConverter.toH2OFrame(this, ds,frameName)
-  def asH2OFrame[T<: Product : TypeTag](ds: Dataset[T], frameName: String): H2OFrame = asH2OFrame(ds, Option(frameName))
+  def asH2OFrame[T <: Product : TypeTag](ds: Dataset[T]): H2OFrame = asH2OFrame(ds, None)
+
+  def asH2OFrame[T <: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): H2OFrame =
+    withConversionDebugPrints(sparkContext, "Dataset", DatasetConverter.toH2OFrame(this, ds, frameName))
+
+  def asH2OFrame[T <: Product : TypeTag](ds: Dataset[T], frameName: String): H2OFrame = asH2OFrame(ds, Option(frameName))
 
   /** Transforms Dataset[Supported type] to H2OFrame key */
-  def toH2OFrameKey[T<: Product : TypeTag](ds: Dataset[T]): Key[Frame] = toH2OFrameKey(ds, None)
-  def toH2OFrameKey[T<: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): Key[Frame] = asH2OFrame(ds, frameName)._key
-  def toH2OFrameKey[T<: Product : TypeTag](ds: Dataset[T], frameName: String): Key[Frame] = toH2OFrameKey(ds, Option(frameName))
+  def toH2OFrameKey[T <: Product : TypeTag](ds: Dataset[T]): Key[Frame] = toH2OFrameKey(ds, None)
 
-  /** Create a new H2OFrame based on existing Frame referenced by its key.*/
+  def toH2OFrameKey[T <: Product : TypeTag](ds: Dataset[T], frameName: Option[String]): Key[Frame] = asH2OFrame(ds, frameName)._key
+
+  def toH2OFrameKey[T <: Product : TypeTag](ds: Dataset[T], frameName: String): Key[Frame] = toH2OFrameKey(ds, Option(frameName))
+
+  /** Create a new H2OFrame based on existing Frame referenced by its key. */
   def asH2OFrame(s: String): H2OFrame = new H2OFrame(s)
 
   /** Create a new H2OFrame based on existing Frame */
@@ -211,7 +259,8 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
 
   /** Convert given H2O frame into DataFrame type */
   def asDataFrame[T <: Frame](fr: T, copyMetadata: Boolean = true)(implicit sqlContext: SQLContext): DataFrame =
-  SparkDataFrameConverter.toDataFrame(this, fr, copyMetadata)
+    SparkDataFrameConverter.toDataFrame(this, fr, copyMetadata)
+
   def asDataFrame(s: String, copyMetadata: Boolean)(implicit sqlContext: SQLContext): DataFrame =
     SparkDataFrameConverter.toDataFrame(this, new H2OFrame(s), copyMetadata)
 
@@ -238,16 +287,16 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
 
   /** Stops H2O context.
     *
-    * @param stopSparkContext  stop also spark context
+    * @param stopSparkContext stop also spark context
     */
   def stop(stopSparkContext: Boolean = false): Unit = synchronized {
-    if(!stopped) {
+    if (!stopped) {
       announcementService.shutdown
       uiUpdateThread.interrupt()
       backend.stop(stopSparkContext)
       H2OContext.stop(this)
       stopped = true
-    }else{
+    } else {
       logWarning("H2OContext is already stopped, this call has no effect anymore")
     }
   }
@@ -255,30 +304,39 @@ class H2OContext private (val sparkSession: SparkSession, conf: H2OConf) extends
   /** Open H2O Flow running in this client. */
   def openFlow(): Unit = openURI(sparkContext, s"http://$h2oLocalClient")
 
-  /** Open Spark task manager. */
-  //def openSparkUI(): Unit = sparkUI.foreach(openURI(_))
-
   override def toString: String = {
-    s"""
-       |Sparkling Water Context:
-       | * H2O name: ${H2O.ARGS.name}
-       | * cluster size: ${h2oNodes.size}
-       | * list of used nodes:
-       |  (executorId, host, port)
-       |  ------------------------
-       |  ${h2oNodes.mkString("\n  ")}
-       |  ------------------------
-       |
-      |  Open H2O Flow in browser: http://$h2oLocalClient (CMD + click in Mac OSX)
+    val basic =
+      s"""
+         |Sparkling Water Context:
+         | * H2O name: ${H2O.ARGS.name}
+         | * cluster size: ${h2oNodes.size}
+         | * list of used nodes:
+         |  (executorId, host, port)
+         |  ------------------------
+         |  ${h2oNodes.mkString("\n  ")}
+         |  ------------------------
+         |
+         |  Open H2O Flow in browser: http://$h2oLocalClient (CMD + click in Mac OSX)
+         |
     """.stripMargin
+    val sparkYarnAppId = if (sparkContext.master.toLowerCase.startsWith("yarn")) {
+      s"""
+         | * Yarn App ID of Spark application: ${sparkContext.applicationId}
+    """.stripMargin
+    } else {
+      ""
+    }
+
+    basic ++ sparkYarnAppId ++ backend.epilog
   }
 
   // scalastyle:off
   // Disable style checker so "implicits" object can start with lowercase i
-  /** Define implicits available via h2oContext.implicits._*/
+  /** Define implicits available via h2oContext.implicits._ */
   object implicits extends H2OContextImplicits with Serializable {
     protected override def _h2oContext: H2OContext = self
   }
+
   // scalastyle:on
 }
 
@@ -314,7 +372,7 @@ object H2OContext extends Logging {
     * Get existing or create new H2OContext based on provided H2O configuration
     *
     * @param sparkSession Spark Session
-    * @param conf H2O configuration
+    * @param conf         H2O configuration
     * @return H2O Context
     */
   def getOrCreate(sparkSession: SparkSession, conf: H2OConf): H2OContext = synchronized {
@@ -334,9 +392,9 @@ object H2OContext extends Logging {
   }
 
   def getOrCreate(sc: SparkContext, conf: H2OConf): H2OContext = {
-    logWarning("Method H2OContext.getOrCreate with argument of type SparkContext is deprecated and " +
-      "parameter of type SparkSession is preferred")
-    getOrCreate(SparkSession.builder().getOrCreate(), conf)
+    logWarning("Method H2OContext.getOrCreate with an argument of type SparkContext is deprecated and " +
+      "parameter of type SparkSession is preferred.")
+    getOrCreate(SparkSession.builder().sparkContext(sc).getOrCreate(), conf)
   }
 
   /**
@@ -352,9 +410,9 @@ object H2OContext extends Logging {
   }
 
   def getOrCreate(sc: SparkContext): H2OContext = {
-    logWarning("Method H2OContext.getOrCreate with argument of type SparkContext is deprecated and " +
+    logWarning("Method H2OContext.getOrCreate with an argument of type SparkContext is deprecated and " +
       "parameter of type SparkSession is preferred.")
-    val spark = SparkSession.builder().getOrCreate()
+    val spark = SparkSession.builder().sparkContext(sc).getOrCreate()
     getOrCreate(spark, new H2OConf(spark))
   }
 
@@ -366,4 +424,3 @@ object H2OContext extends Logging {
 }
 
 class WrongSparkVersion(msg: String) extends Exception(msg) with NoStackTrace
-
